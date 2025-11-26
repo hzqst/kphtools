@@ -7,7 +7,16 @@ Usage:
 ```
     python download_symbols.py -xml=path/to/kphdyn.xml -symboldir=C:/Symbols [-arch=amd64] [-version=10.0.19041] [-symbol_server=https//msdl.microsoft.com/download/symbols]
 ```
+
 Requirements:
-    ```
-    pip install pefile requests
-    ```
+```
+pip install pefile requests
+```
+
+Files downloaded:
+
+```
+C:\Symbols\amd64\ntoskrnl.exe.10.0.10240.16393\ntoskrnl.exe
+C:\Symbols\amd64\ntoskrnl.exe.10.0.10240.16393\ntkrnlmp.pdb
+...others
+```

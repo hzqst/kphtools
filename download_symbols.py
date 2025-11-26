@@ -184,7 +184,7 @@ def download_pe(entry, symbol_dir):
     Download a PE file based on the entry data.
     
     Args:
-        entry: Dictionary with file info (file, version, timestamp, size)
+        entry: Dictionary with file info (file, version, timestamp, size, arch)
         symbol_dir: Base directory to save symbols
         
     Returns:
@@ -192,9 +192,10 @@ def download_pe(entry, symbol_dir):
     """
     file_name = entry["file"]
     version = entry["version"]
+    arch = entry["arch"]
     
-    # Build target path: {symboldir}/{file}.{version}/{file}
-    target_dir = os.path.join(symbol_dir, f"{file_name}.{version}")
+    # Build target path: {symboldir}/{arch}/{file}.{version}/{file}
+    target_dir = os.path.join(symbol_dir, arch, f"{file_name}.{version}")
     target_path = os.path.join(target_dir, file_name)
     
     # Skip if already exists
