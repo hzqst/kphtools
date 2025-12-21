@@ -21,6 +21,7 @@ import argparse
 import hashlib
 import http.server
 import socketserver
+import json
 from io import BytesIO
 import re
 
@@ -155,12 +156,24 @@ def verify_signature(file_data):
         for signature in signed_pe.iter_embedded_signatures():
             signer_info = signature.signer_info
             
-            # Get signer certificate - try different ways to access certificates
+            # Get signer certificate from signature certificates using issuer and serial_number
             signer_cert = None
-            if hasattr(signer_info, 'certificates') and signer_info.certificates:
-                signer_cert = signer_info.certificates[0]
-            elif hasattr(signer_info, 'certificate'):
-                signer_cert = signer_info.certificate
+            if hasattr(signature, 'certificates') and signature.certificates:
+                # Find certificate matching signer_info's issuer and serial_number
+                for cert in signature.certificates:
+                    try:
+                        if (hasattr(cert, 'issuer') and hasattr(cert, 'serial_number') and
+                            hasattr(signer_info, 'issuer') and hasattr(signer_info, 'serial_number')):
+                            if (str(cert.issuer) == str(signer_info.issuer) and
+                                cert.serial_number == signer_info.serial_number):
+                                signer_cert = cert
+                                break
+                    except:
+                        pass
+                
+                # If no match found, use first certificate as fallback
+                if not signer_cert and signature.certificates:
+                    signer_cert = signature.certificates[0]
             
             if not signer_cert:
                 continue
@@ -366,71 +379,94 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
         self.symboldir = symboldir
         super().__init__(*args, **kwargs)
     
+    def send_json_response(self, status_code, message, data=None):
+        """
+        Send JSON response.
+        
+        Args:
+            status_code: HTTP status code
+            message: Response message
+            data: Optional additional data dictionary
+        """
+        response = {
+            'success': 200 <= status_code < 300,
+            'message': message
+        }
+        if data:
+            response.update(data)
+        
+        response_json = json.dumps(response, ensure_ascii=False)
+        
+        self.send_response(status_code)
+        self.send_header('Content-Type', 'application/json; charset=utf-8')
+        self.end_headers()
+        self.wfile.write(response_json.encode('utf-8'))
+    
     def do_POST(self):
         """Handle POST requests to /upload."""
         if self.path != '/upload':
-            self.send_error(404, "Not Found")
+            self.send_json_response(404, "Not Found")
             return
         
         # Check content length
         try:
             content_length = int(self.headers.get('Content-Length', 0))
         except ValueError:
-            self.send_error(400, "Invalid Content-Length")
+            self.send_json_response(400, "Invalid Content-Length")
             return
         
         if content_length > MAX_FILE_SIZE:
-            self.send_error(413, "File too large (max 20MB)")
+            self.send_json_response(413, f"File too large (max {MAX_FILE_SIZE / (1024 * 1024)}MB)")
             return
         
         if content_length == 0:
-            self.send_error(400, "No file data")
+            self.send_json_response(400, "No file data")
             return
         
         # Check Content-Type
         content_type = self.headers.get('Content-Type', '')
         if not content_type.startswith('multipart/form-data'):
-            self.send_error(400, "Content-Type must be multipart/form-data")
+            self.send_json_response(400, "Content-Type must be multipart/form-data")
             return
         
         # Parse multipart form data
         try:
             form = parse_multipart_form_data(self.rfile, content_type, content_length)
         except Exception as e:
-            self.send_error(400, f"Failed to parse form data: {e}")
+            self.send_json_response(400, f"Failed to parse form data: {e}")
             return
         
         # Get uploaded file
         if 'file' not in form:
-            self.send_error(400, "No file in request")
+            self.send_json_response(400, "No file in request")
             return
         
         file_item = form['file']
         if not file_item.filename:
-            self.send_error(400, "No filename provided")
+            self.send_json_response(400, "No filename provided")
             return
         
         # Read file data
         try:
             file_data = file_item.file.read()
         except Exception as e:
-            self.send_error(400, f"Failed to read file data: {e}")
+            self.send_json_response(400, f"Failed to read file data: {e}")
             return
         
         # Verify file size matches Content-Length
         if len(file_data) > MAX_FILE_SIZE:
-            self.send_error(413, "File too large (max 20MB)")
+            self.send_json_response(413, f"File too large (max {MAX_FILE_SIZE / (1024 * 1024)}MB)")
             return
         
         # Verify PE file and extract information
         pe_info = verify_pe_file(file_data)
         if not pe_info:
-            self.send_error(400, "Invalid PE file or FileDescription does not match 'NT Kernel & System'")
+            self.send_json_response(400, "Invalid PE file or FileDescription does not match 'NT Kernel & System'")
             return
         
         # Verify digital signature
         if not verify_signature(file_data):
-            self.send_error(400, "Digital signature verification failed or does not match requirements")
+            self.send_json_response(400, "Digital signature verification failed or does not match requirements")
             return
         
         # Save file
@@ -443,12 +479,13 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
         )
         
         if success:
-            self.send_response(status_code)
-            self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(message.encode('utf-8'))
+            self.send_json_response(status_code, message, {
+                'file_name': pe_info['file_name'],
+                'file_version': pe_info['file_version'],
+                'arch': pe_info['arch']
+            })
         else:
-            self.send_error(status_code, message)
+            self.send_json_response(status_code, message)
     
     def log_message(self, format, *args):
         """Override to customize log format."""
