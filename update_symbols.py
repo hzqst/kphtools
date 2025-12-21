@@ -6,6 +6,9 @@ Updates field offsets in kphdyn.xml by parsing PDB files using llvm-pdbutil.
 
 Usage:
     python update_symbols.py -xml=kphdyn.xml -symboldir=C:/Symbols -symbol=EPROCESS->SectionObject -symname=EpSectionObject
+    
+    Or:
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -symbol "EPROCESS->SectionObject" -symname EpSectionObject
 
 Requirements:
     - llvm-pdbutil must be available in system PATH
@@ -13,113 +16,51 @@ Requirements:
 
 import os
 import re
+import argparse
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 
 
 def parse_args():
-    """
-    Parse command line arguments.
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Updates field offsets in kphdyn.xml by parsing PDB files using llvm-pdbutil"
+    )
+    parser.add_argument(
+        "-xml",
+        required=True,
+        help="Path to the XML file (e.g., kphdyn.xml)"
+    )
+    parser.add_argument(
+        "-symboldir",
+        required=True,
+        help="Directory containing symbol files"
+    )
+    parser.add_argument(
+        "-symbol",
+        required=True,
+        help="Symbol to parse (e.g., EPROCESS->SectionObject)"
+    )
+    parser.add_argument(
+        "-symname",
+        required=True,
+        help="Field name in XML (e.g., EpSectionObject)"
+    )
     
-    Supports both formats:
-        -xml=value
-        -xml value
-    """
-    # Custom argument parsing to support -key=value format
-    args_dict = {
-        'xml': None,
-        'symboldir': None,
-        'symbol': None,
-        'symname': None
-    }
-    
-    argv = sys.argv[1:]
-    i = 0
-    while i < len(argv):
-        arg = argv[i]
-        
-        # Handle -key=value format
-        if '=' in arg and arg.startswith('-'):
-            key, value = arg.split('=', 1)
-            key = key.lstrip('-')
-            if key in args_dict:
-                args_dict[key] = value
-            else:
-                print(f"Error: Unknown argument: {arg}")
-                print_usage()
-                sys.exit(1)
-        # Handle -key value format
-        elif arg.startswith('-'):
-            key = arg.lstrip('-')
-            if key in args_dict:
-                if i + 1 < len(argv) and not argv[i + 1].startswith('-'):
-                    args_dict[key] = argv[i + 1]
-                    i += 1
-                else:
-                    print(f"Error: Missing value for argument: {arg}")
-                    print_usage()
-                    sys.exit(1)
-            elif key in ('h', 'help'):
-                print_usage()
-                sys.exit(0)
-            else:
-                print(f"Error: Unknown argument: {arg}")
-                print_usage()
-                sys.exit(1)
-        else:
-            print(f"Error: Unexpected argument: {arg}")
-            print_usage()
-            sys.exit(1)
-        
-        i += 1
+    args = parser.parse_args()
     
     # Validate required arguments
-    if not args_dict['xml']:
-        print("Error: -xml cannot be empty")
-        print_usage()
-        sys.exit(1)
-    if not args_dict['symboldir']:
-        print("Error: -symboldir cannot be empty")
-        print_usage()
-        sys.exit(1)
-    if not args_dict['symbol']:
-        print("Error: -symbol cannot be empty")
-        print_usage()
-        sys.exit(1)
-    if not args_dict['symname']:
-        print("Error: -symname cannot be empty")
-        print_usage()
-        sys.exit(1)
-    
-    # Convert to namespace-like object
-    class Args:
-        pass
-    
-    args = Args()
-    args.xml = args_dict['xml']
-    args.symboldir = args_dict['symboldir']
-    args.symbol = args_dict['symbol']
-    args.symname = args_dict['symname']
+    if not args.xml:
+        parser.error("-xml cannot be empty")
+    if not args.symboldir:
+        parser.error("-symboldir cannot be empty")
+    if not args.symbol:
+        parser.error("-symbol cannot be empty")
+    if not args.symname:
+        parser.error("-symname cannot be empty")
     
     return args
-
-
-def print_usage():
-    """Print usage information."""
-    print("""
-Usage:
-    python update_symbols.py -xml=<path> -symboldir=<path> -symbol=<symbol> -symname=<name>
-
-Arguments:
-    -xml=<path>       Path to the XML file (e.g., kphdyn.xml)
-    -symboldir=<path> Directory containing symbol files
-    -symbol=<symbol>  Symbol to parse (e.g., EPROCESS->SectionObject)
-    -symname=<name>   Field name in XML (e.g., EpSectionObject)
-
-Example:
-    python update_symbols.py -xml=kphdyn.xml -symboldir=C:/Symbols -symbol=EPROCESS->SectionObject -symname=EpSectionObject
-""")
 
 
 def parse_symbol(symbol_str):

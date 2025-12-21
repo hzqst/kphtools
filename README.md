@@ -4,7 +4,7 @@
 
 Requirements:
 ```
-pip install pefile requests
+pip install pefile requests signify
 ```
 
 ## Download PE & Symbol listed in kphdyn.xml
@@ -54,3 +54,34 @@ A new entry :
 will be added to `kphdyn.xml` if file with given has was found on virustotal.
 
 * Get a valid api key from https://www.virustotal.com/
+
+## HTTP server for collecting ntoskrnl.exe 
+
+HTTP server that handles file uploads, validates PE files and digital signatures, and stores files in the symbol directory structure.
+
+Usage, [] for optional:
+
+```
+python upload_server.py -symboldir="C:/Symbols" [-port=8000]
+```
+
+The server will:
+- Accept POST requests to `/upload` endpoint
+- Validate uploaded files (must be PE files)
+- Verify FileDescription must be "NT Kernel & System"
+- Verify Authenticode signature (Signer must be "Microsoft Windows", Issuer must be "Microsoft Windows Production PCA 2011")
+- Extract OriginalFilename and FileVersion from FileResource
+- Determine architecture (x86/amd64/arm64) from PE header
+- Store files to: `{symboldir}/{arch}/{FileName}.{FileVersion}/{FileName}`
+
+Example:
+- If `-symboldir="C:/Symbols"`, `arch=amd64`, `FileName=ntoskrnl.exe`, `FileVersion=10.0.22621.741`
+- File will be stored at: `C:/Symbols/amd64/ntoskrnl.exe.10.0.22621.741/ntoskrnl.exe`
+
+Upload a file using curl:
+```
+curl -X POST -F "file=@C:/Windows/System32/ntoskrnl.exe" http://localhost:8000/upload
+```
+
+* File size limit: 20MB
+* If the target file already exists, it will not be overwritten
