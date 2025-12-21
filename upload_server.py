@@ -18,18 +18,19 @@ Requirements:
 import os
 import sys
 import argparse
-import cgi
 import hashlib
 import http.server
 import socketserver
 from io import BytesIO
+import re
 
 try:
     import pefile
-    from signify.authenticode import SignedPEFile
-    from signify.exceptions import AuthenticodeVerificationError
+    from signify.authenticode.signed_file.pe import SignedPEFile
+    from signify.authenticode.verification_result import VerificationError
 except ImportError as e:
-    print(f"Error: Missing required dependency: {e.name}")
+    error_name = getattr(e, 'name', str(e).split("'")[1] if "'" in str(e) else 'unknown')
+    print(f"Error: Missing required dependency: {error_name}")
     print("Please install required packages: pip install pefile signify")
     sys.exit(1)
 
@@ -144,12 +145,15 @@ def verify_signature(file_data):
         file_io = BytesIO(file_data)
         signed_pe = SignedPEFile(file_io)
         
-        # Verify the signature
-        signed_pe.verify()
+        # Verify the signature - this will raise VerificationError if invalid
+        try:
+            signed_pe.verify()
+        except VerificationError:
+            return False
         
-        # Check signer and issuer
-        for signed_data in signed_pe.signed_datas:
-            signer_info = signed_data.signer_info
+        # Check signer and issuer from embedded signatures
+        for signature in signed_pe.iter_embedded_signatures():
+            signer_info = signature.signer_info
             
             # Get signer certificate - try different ways to access certificates
             signer_cert = None
@@ -219,11 +223,93 @@ def verify_signature(file_data):
         
         return False
         
-    except AuthenticodeVerificationError:
+    except VerificationError:
         return False
     except Exception as e:
         # Don't print error in production, just return False
         return False
+
+
+def parse_multipart_form_data(rfile, content_type, content_length):
+    """
+    Parse multipart/form-data without using deprecated cgi module.
+    
+    Args:
+        rfile: File-like object to read from
+        content_type: Content-Type header value
+        content_length: Content-Length header value
+        
+    Returns:
+        Dictionary mapping field names to file objects with filename and file attributes
+    """
+    # Extract boundary from Content-Type
+    boundary_match = re.search(r'boundary=([^;]+)', content_type)
+    if not boundary_match:
+        raise ValueError("No boundary found in Content-Type")
+    
+    boundary = boundary_match.group(1).strip('"')
+    boundary_bytes = boundary.encode('ascii')
+    delimiter = b'--' + boundary_bytes
+    end_delimiter = delimiter + b'--'
+    
+    # Read all data
+    data = rfile.read(content_length)
+    
+    # Remove trailing boundary end marker if present
+    if data.endswith(end_delimiter):
+        data = data[:-len(end_delimiter)]
+    elif data.endswith(end_delimiter + b'\r\n'):
+        data = data[:-len(end_delimiter) - 2]
+    elif data.endswith(end_delimiter + b'\n'):
+        data = data[:-len(end_delimiter) - 1]
+    
+    # Split by delimiter
+    parts = data.split(delimiter)
+    
+    form_data = {}
+    
+    for part in parts:
+        # Remove leading/trailing whitespace and newlines
+        part = part.strip(b'\r\n')
+        if not part:
+            continue
+        
+        # Split headers and body
+        if b'\r\n\r\n' in part:
+            headers_raw, body = part.split(b'\r\n\r\n', 1)
+        elif b'\n\n' in part:
+            headers_raw, body = part.split(b'\n\n', 1)
+        else:
+            continue
+        
+        # Parse headers
+        headers = {}
+        for line in headers_raw.split(b'\n'):
+            line = line.strip()
+            if b':' in line:
+                key, value = line.split(b':', 1)
+                headers[key.strip().lower()] = value.strip()
+        
+        # Extract Content-Disposition
+        content_disposition = headers.get(b'content-disposition', b'').decode('utf-8', errors='ignore')
+        
+        # Extract field name and filename
+        name_match = re.search(r'name="([^"]+)"', content_disposition)
+        filename_match = re.search(r'filename="([^"]+)"', content_disposition)
+        
+        if name_match:
+            field_name = name_match.group(1)
+            filename = filename_match.group(1) if filename_match else None
+            
+            # Create a file-like object
+            class FileItem:
+                def __init__(self, data, filename):
+                    self.filename = filename
+                    self.file = BytesIO(data)
+            
+            form_data[field_name] = FileItem(body.rstrip(b'\r\n'), filename)
+    
+    return form_data
 
 
 def save_file(file_data, file_name, file_version, arch, symboldir):
@@ -301,13 +387,15 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(400, "No file data")
             return
         
+        # Check Content-Type
+        content_type = self.headers.get('Content-Type', '')
+        if not content_type.startswith('multipart/form-data'):
+            self.send_error(400, "Content-Type must be multipart/form-data")
+            return
+        
         # Parse multipart form data
         try:
-            form = cgi.FieldStorage(
-                fp=self.rfile,
-                headers=self.headers,
-                environ={'REQUEST_METHOD': 'POST', 'CONTENT_LENGTH': str(content_length)}
-            )
+            form = parse_multipart_form_data(self.rfile, content_type, content_length)
         except Exception as e:
             self.send_error(400, f"Failed to parse form data: {e}")
             return
