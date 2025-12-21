@@ -78,7 +78,7 @@ Example:
 - If `-symboldir="C:/Symbols"`, `arch=amd64`, `FileName=ntoskrnl.exe`, `FileVersion=10.0.22621.741`
 - File will be stored at: `C:/Symbols/amd64/ntoskrnl.exe.10.0.22621.741/ntoskrnl.exe`
 
-Upload a file using curl:
+Test that upload your ntoskrnl to localhost server:
 ```
 curl -X POST -F "file=@C:/Windows/System32/ntoskrnl.exe" http://localhost:8000/upload
 ```

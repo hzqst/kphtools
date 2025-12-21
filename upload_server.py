@@ -113,6 +113,15 @@ def verify_pe_file(file_data):
         if not original_filename or not file_version:
             return None
         
+        # Normalize filename: if OriginalFilename is ntkrnlmp.exe, use ntoskrnl.exe
+        if original_filename.lower() == 'ntkrnlmp.exe':
+            original_filename = 'ntoskrnl.exe'
+        
+        # Clean file version: remove content in parentheses if present
+        # Example: "10.0.26100.7462 (WinBuild.160101.0800)" -> "10.0.26100.7462"
+        if '(' in file_version:
+            file_version = file_version.split('(')[0].strip()
+        
         # Determine architecture
         machine = pe.FILE_HEADER.Machine
         if machine == pefile.MACHINE_TYPE['IMAGE_FILE_MACHINE_I386']:
