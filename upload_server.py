@@ -25,6 +25,7 @@ import json
 from io import BytesIO
 from urllib.parse import urlparse, parse_qs
 import re
+import gzip
 
 try:
     import pefile
@@ -556,10 +557,24 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
             self.send_json_response(400, f"Failed to read file data: {e}")
             return
         
-        # Verify file size matches Content-Length
+        # Verify file size does not exceed maximum allowed size (compressed size)
         if len(file_data) > MAX_FILE_SIZE:
             self.send_json_response(413, f"File too large (max {MAX_FILE_SIZE / (1024 * 1024)}MB)")
             return
+
+        # Handle optional gzip compression indicated by header
+        compression_type = self.headers.get('X-File-Compressed', '').strip().lower()
+        if compression_type == 'gzip':
+            try:
+                file_data = gzip.decompress(file_data)
+            except OSError as e:
+                self.send_json_response(400, f"Failed to decompress gzip data: {e}")
+                return
+
+            # Check decompressed size as well
+            if len(file_data) > MAX_FILE_SIZE:
+                self.send_json_response(413, f"Decompressed file too large (max {MAX_FILE_SIZE / (1024 * 1024)}MB)")
+                return
         
         # Verify PE file and extract information
         pe_info = verify_pe_file(file_data)
