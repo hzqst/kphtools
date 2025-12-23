@@ -58,21 +58,17 @@ def parse_args():
     )
     parser.add_argument(
         "-symboldir",
-        required=True,
-        help="Directory to store uploaded files"
+        required=False,
+        help="Directory to store uploaded files (can also be set via KPHTOOLS_SYMBOLDIR environment variable)"
     )
     parser.add_argument(
         "-port",
         type=int,
         default=8000,
-        help="Port to listen on (default: 8000)"
+        help="Port to listen on (default: 8000, can also be set via KPHTOOLS_SERVER_PORT environment variable)"
     )
     
     args = parser.parse_args()
-    
-    # Validate required arguments
-    if not args.symboldir:
-        parser.error("-symboldir cannot be empty")
     
     return args
 
@@ -636,8 +632,26 @@ def main():
     """Main entry point."""
     args = parse_args()
     
-    symboldir = args.symboldir
-    port = args.port
+    # Get symboldir from environment variable or command line argument
+    symboldir = os.environ.get('KPHTOOLS_SYMBOLDIR')
+    if not symboldir:
+        symboldir = args.symboldir
+    
+    # Validate that symboldir is provided
+    if not symboldir:
+        print("Error: symboldir must be provided either via KPHTOOLS_SYMBOLDIR environment variable or -symboldir command line argument")
+        sys.exit(1)
+    
+    # Get port from environment variable or command line argument
+    port_env = os.environ.get('KPHTOOLS_SERVER_PORT')
+    if port_env:
+        try:
+            port = int(port_env)
+        except ValueError:
+            print(f"Error: Invalid KPHTOOLS_SERVER_PORT environment variable value: {port_env}")
+            sys.exit(1)
+    else:
+        port = args.port
     
     # Validate symbol directory
     if not os.path.exists(symboldir):
