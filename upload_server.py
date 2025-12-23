@@ -19,7 +19,16 @@ Usage:
     python upload_server.py -symboldir C:/Symbols -port 8000
 
 Requirements:
-    pip install pefile signify
+    Python packages:
+        pip install pefile signify
+    
+    System dependencies (Ubuntu/Debian):
+        sudo apt-get install -y libssl-dev
+    
+    System dependencies (CentOS/RHEL/Fedora):
+        sudo yum install -y openssl-devel
+        # or on newer versions:
+        sudo dnf install -y openssl-devel
 """
 
 import os
@@ -42,6 +51,26 @@ except ImportError as e:
     error_name = getattr(e, 'name', str(e).split("'")[1] if "'" in str(e) else 'unknown')
     print(f"Error: Missing required dependency: {error_name}")
     print("Please install required packages: pip install pefile signify")
+    sys.exit(1)
+except Exception as e:
+    # Handle oscrypto errors (missing OpenSSL libraries)
+    error_str = str(e)
+    if 'libcrypto' in error_str or 'LibraryNotFoundError' in str(type(e).__name__):
+        print("Error: OpenSSL library (libcrypto) not found.")
+        print("")
+        print("On Ubuntu/Debian, please install OpenSSL development libraries:")
+        print("  sudo apt-get update")
+        print("  sudo apt-get install -y libssl-dev")
+        print("")
+        print("On CentOS/RHEL/Fedora, please install:")
+        print("  sudo yum install -y openssl-devel")
+        print("  # or on newer versions:")
+        print("  sudo dnf install -y openssl-devel")
+        print("")
+        print("After installing, restart the server.")
+    else:
+        print(f"Error importing signify library: {e}")
+        print("Please ensure all dependencies are correctly installed.")
     sys.exit(1)
 
 

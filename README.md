@@ -3,9 +3,24 @@
 [kphdyn.xml](https://github.com/winsiderss/systeminformer/blob/master/kphlib/kphdyn.xml).
 
 Requirements:
+
+Python packages:
 ```
 pip install pefile requests signify
 ```
+
+System dependencies (for signify library, required on Linux):
+- **Ubuntu/Debian:**
+  ```bash
+  sudo apt-get update
+  sudo apt-get install -y libssl-dev
+  ```
+- **CentOS/RHEL/Fedora:**
+  ```bash
+  sudo yum install -y openssl-devel
+  # or on newer versions:
+  sudo dnf install -y openssl-devel
+  ```
 
 ## Download PE & Symbol listed in kphdyn.xml
 
@@ -58,6 +73,8 @@ will be added to `kphdyn.xml` if file with given has was found on virustotal.
 ## HTTP server for collecting ntoskrnl.exe 
 
 HTTP server that handles file uploads, validates PE files and digital signatures, and stores files in the symbol directory structure.
+
+**Note:** On Linux systems (Ubuntu/Debian/CentOS), you must install OpenSSL development libraries before running this server. See Requirements section above.
 
 Usage, [] for optional:
 
