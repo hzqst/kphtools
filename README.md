@@ -5,7 +5,7 @@
 Requirements:
 
 Python packages:
-```
+```bash
 pip install pefile requests signify
 ```
 
@@ -21,6 +21,21 @@ System dependencies (for signify library, required on Linux):
   # or on newer versions:
   sudo dnf install -y openssl-devel
   ```
+
+**Troubleshooting:** If you encounter `LibraryNotFoundError: Error detecting the version of libcrypto`:
+1. Ensure `libssl-dev` (or `openssl-devel`) is installed (not just `openssl`)
+2. Upgrade `oscrypto` library (especially important for OpenSSL 3.x):
+   ```bash
+   pip install --upgrade oscrypto
+   # or upgrade all dependencies:
+   pip install --upgrade -r requirements.txt
+   ```
+3. Clear Python cache and reinstall if needed:
+   ```bash
+   find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+   pip uninstall -y oscrypto signify
+   pip install --no-cache-dir signify
+   ```
 
 ## Download PE & Symbol listed in kphdyn.xml
 
