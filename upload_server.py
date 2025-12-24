@@ -481,10 +481,17 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
         self.send_json_response(code, message)
     
     def do_GET(self):
-        """Handle GET requests to /exists."""
+        """Handle GET requests to /health and /exists."""
         parsed_url = urlparse(self.path)
+        path = parsed_url.path
         
-        if parsed_url.path != '/exists':
+        # Handle health check endpoint
+        if path == '/health':
+            self.send_json_response(200, "OK", {'status': 'healthy'})
+            return
+        
+        # Handle file existence check endpoint
+        if path != '/exists':
             self.send_json_response(404, "Not Found")
             return
         
