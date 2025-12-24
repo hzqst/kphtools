@@ -42,15 +42,27 @@ System dependencies (for signify library, required on Linux):
    pip install --no-cache-dir signify
    ```
 
-## Download PE & Symbol listed in kphdyn.xml
+## Download PE & Symbol listed
 
 Downloads PE files and their corresponding PDB symbol files from Microsoft Symbol Server
 based on entries from `kphdyn.xml`
 
 Usage, [] for optional:
 
-```
+```bash
 python download_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" [-arch=amd64] [-version=10.0.10240.16393] [-symbol_server="https//msdl.microsoft.com/download/symbols"]
+```
+
+Possible environment variables: 
+
+```bash
+export KPHTOOLS_XML="path/to/kphdyn.xml"
+export KPHTOOLS_SYMBOLDIR="C:/Symbols"
+```
+
+```bash
+set KPHTOOLS_XML=path/to/kphdyn.xml
+set KPHTOOLS_SYMBOLDIR=C:/Symbols
 ```
 
 Files downloaded:
@@ -96,12 +108,6 @@ HTTP server that handles file uploads, validates PE files and digital signatures
 
 **Note:** On Linux systems (Ubuntu/Debian/CentOS), you must install OpenSSL development libraries before running this server. See Requirements section above.
 
-Usage, [] for optional:
-
-```
-python upload_server.py -symboldir="C:/Symbols" [-port=8000]
-```
-
 The server will:
 - Accept POST requests to `/upload` endpoint
 - Validate uploaded files (must be PE files)
@@ -115,7 +121,23 @@ Example:
 - If `-symboldir="C:/Symbols"`, `arch=amd64`, `FileName=ntoskrnl.exe`, `FileVersion=10.0.22621.741`
 - File will be stored at: `C:/Symbols/amd64/ntoskrnl.exe.10.0.22621.741/ntoskrnl.exe`
 
-Checks if your ntoskrnl already exists:
+### Usage, [] for optional
+
+```
+python upload_server.py -symboldir="C:/Symbols" [-port=8000]
+```
+
+### Possible environment variables
+
+```bash
+export KPHTOOLS_SYMBOLDIR="C:/Symbols"
+```
+
+```bash
+set KPHTOOLS_SYMBOLDIR=C:/Symbols
+```
+
+### API: Checks if your ntoskrnl already exists:
 
 ```
 curl "http://localhost:8000/exists?filename=ntoskrnl.exe&arch=amd64&fileversion=10.0.26100.7462"
@@ -131,7 +153,7 @@ Not found:
 {"success": true, "message": "File existence checked", "filename": "ntoskrnl.exe", "arch": "amd64", "fileversion": "10.0.26100.7461", "exists": false, "path": "amd64/ntoskrnl.exe.10.0.26100.7461/ntoskrnl.exe"}
 ```
 
-Upload your ntoskrnl to localhost server:
+### API: Upload your ntoskrnl to localhost server:
 
 ```
 curl -X POST -F "file=@C:/Windows/System32/ntoskrnl.exe" http://localhost:8000/upload
@@ -141,3 +163,13 @@ curl -X POST -F "file=@C:/Windows/System32/ntoskrnl.exe" http://localhost:8000/u
 * If the target file already exists, it will not be overwritten
 * Both "multipart/form-data" and "application/octet-stream" are supported
 * Header "X-File-Compressed: gzip" supported, client should gzip the ntoskrnl payload before uploading.
+
+### API: Healthy Check
+
+```
+curl "http://localhost:8000/health"
+```
+
+```
+{"status": "healthy"}
+```
