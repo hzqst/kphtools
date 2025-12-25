@@ -141,6 +141,10 @@ def parse_xml(xml_path, arch_filter=None, version_filter=None):
         if version_filter and not version.startswith(version_filter):
             continue
         
+        # Skip lxcore.sys
+        if file_name and file_name.lower() == "lxcore.sys":
+            continue
+        
         entries.append({
             "arch": arch,
             "version": version,
