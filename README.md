@@ -20,7 +20,7 @@ powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/w
 
 Python packages:
 ```bash
-pip install -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/ --break-system-packages
+pip install -r requirements.txt --break-system-packages
 ```
 
 System dependencies (for signify library, required on Linux):
@@ -36,25 +36,10 @@ System dependencies (for signify library, required on Linux):
   sudo dnf install -y openssl-devel
   ```
 
-- **Fix oscrypto issue -- Error detecting the version of libcrypto :**
+- **Fix oscrypto issue - Error detecting the version of libcrypto :**
 ```bash
   pip install -I git+https://github.com/wbond/oscrypto.git --break-system-packages
 ```
-
-**Troubleshooting:** If you encounter `LibraryNotFoundError: Error detecting the version of libcrypto`:
-1. Ensure `libssl-dev` (or `openssl-devel`) is installed (not just `openssl`)
-2. Upgrade `oscrypto` library (especially important for OpenSSL 3.x):
-   ```bash
-   pip install --upgrade oscrypto
-   # or upgrade all dependencies:
-   pip install --upgrade -r requirements.txt
-   ```
-3. Clear Python cache and reinstall if needed:
-   ```bash
-   find . -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
-   pip uninstall -y oscrypto signify
-   pip install --no-cache-dir signify
-   ```
 
 ## Download PE & Symbol listed
 
@@ -79,7 +64,7 @@ set KPHTOOLS_XML=path/to/kphdyn.xml
 set KPHTOOLS_SYMBOLDIR=C:/Symbols
 ```
 
-Files downloaded:
+### Expected downloads
 
 ```
 C:\Symbols\amd64\ntoskrnl.exe.10.0.10240.16393\ntoskrnl.exe
@@ -98,7 +83,7 @@ Updates field offsets in `kphdyn.xml` by parsing PDB files using `llvm-pdbutil`.
 ### Usage
 
 ```bash
-python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json
+python update_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" -json="path/to/kphdyn.json"
 ```
 
 ### Configuration (kphdyn.json)
@@ -112,11 +97,11 @@ The JSON config file specifies which files to process and which symbols to extra
         "symbols": [
             {
                 "name" : "EpObjectTable",
-                "symbol" : "_EPROCESS->ObjectTable"
+                "struct_offset" : "_EPROCESS->ObjectTable"
             },
             {
                 "name" : "EpSectionObject",
-                "symbol" : "_EPROCESS->SectionObject"
+                "struct_offset" : "_EPROCESS->SectionObject"
             }
         ]
     }
