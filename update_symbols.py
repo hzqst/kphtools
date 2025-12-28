@@ -7,6 +7,23 @@ Updates field offsets in kphdyn.xml by parsing PDB files using llvm-pdbutil.
 Usage:
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json
 
+JSON Config Format:
+    [
+        {
+            "file": ["ntoskrnl.exe", "ntkrla57.exe"],
+            "symbols": [
+                {"name": "EpObjectTable", "struct_offset": "_EPROCESS->ObjectTable"},
+                {"name": "PspNotify", "var_offset": "PspCreateProcessNotifyRoutine"},
+                {"name": "ExRefCallback", "fn_offset": "ExReferenceCallBackBlock"}
+            ]
+        }
+    ]
+
+Symbol Types:
+    - struct_offset: Structure member offset (e.g., "_EPROCESS->ObjectTable")
+    - var_offset: Global variable offset (e.g., "PspCreateProcessNotifyRoutine")
+    - fn_offset: Function offset (e.g., "ExReferenceCallBackBlock")
+
 Requirements:
     - llvm-pdbutil must be available in system PATH
 """
@@ -109,8 +126,14 @@ def load_json_config(json_path):
 
     # Validate symbols
     for sym in symbols_list:
-        if "name" not in sym or "symbol" not in sym:
-            print(f"Error: Each symbol must have 'name' and 'symbol' keys: {sym}")
+        if "name" not in sym:
+            print(f"Error: Each symbol must have 'name' key: {sym}")
+            sys.exit(1)
+        # Must have exactly one of: struct_offset, var_offset, fn_offset
+        offset_keys = ["struct_offset", "var_offset", "fn_offset"]
+        found_keys = [k for k in offset_keys if k in sym]
+        if len(found_keys) != 1:
+            print(f"Error: Each symbol must have exactly one of {offset_keys}: {sym}")
             sys.exit(1)
 
     return file_list, symbols_list
@@ -624,54 +647,206 @@ def find_member_offset_by_type_id(lines, type_id, member_name, debug=False):
     return None
 
 
+def run_llvm_pdbutil_publics(pdb_path):
+    """
+    Run llvm-pdbutil to dump public symbols (for global variables and functions).
+
+    Args:
+        pdb_path: Path to the PDB file
+
+    Returns:
+        Output string, or None on failure
+    """
+    if not os.path.exists(pdb_path):
+        return None
+
+    try:
+        result = subprocess.run(
+            ["llvm-pdbutil", "dump", "-publics", pdb_path],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+
+        if result.returncode != 0:
+            print(f"  llvm-pdbutil (publics) failed: {result.stderr}")
+            return None
+
+        return result.stdout
+
+    except FileNotFoundError:
+        print("Error: llvm-pdbutil not found in PATH")
+        print("Please install LLVM tools and ensure llvm-pdbutil is in your PATH")
+        sys.exit(1)
+    except subprocess.TimeoutExpired:
+        print(f"  Timeout while parsing PDB (publics): {pdb_path}")
+        return None
+    except Exception as e:
+        print(f"  Error running llvm-pdbutil (publics): {e}")
+        return None
+
+
+def parse_public_symbol_offset(output, symbol_name, symbol_type, debug=False):
+    """
+    Parse llvm-pdbutil publics dump output to find a symbol's RVA.
+
+    Args:
+        output: llvm-pdbutil publics dump output string
+        symbol_name: Symbol name to find (e.g., PspCreateProcessNotifyRoutine)
+        symbol_type: Type of symbol ('var' for variable, 'fn' for function)
+        debug: Enable debug logging
+
+    Returns:
+        RVA offset as integer, or None if not found
+    """
+    lines = output.split('\n')
+
+    # Pattern for public symbols:
+    # For variables: "     4 | S_PUB32 [size = 36] `PspCreateProcessNotifyRoutine`"
+    #                "           flags = none, addr = 0005:00123456"
+    # For functions: "     4 | S_PUB32 [size = 44] `ExReferenceCallBackBlock`"
+    #                "           flags = function, addr = 0001:00123456"
+
+    expected_flags = "function" if symbol_type == "fn" else "none"
+
+    for i, line in enumerate(lines):
+        # Look for the symbol name in S_PUB32 record
+        if "S_PUB32" in line and f"`{symbol_name}`" in line:
+            if debug:
+                print(f"    [DEBUG] Found S_PUB32 for '{symbol_name}' at line {i}")
+
+            # Look at the next line for flags and addr
+            if i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if debug:
+                    print(f"    [DEBUG] Next line: {next_line.strip()}")
+
+                # Check flags match expected type
+                flags_match = re.search(r'flags\s*=\s*(\w+)', next_line)
+                if flags_match:
+                    actual_flags = flags_match.group(1)
+                    if actual_flags != expected_flags:
+                        if debug:
+                            print(f"    [DEBUG] Skipping: flags={actual_flags}, expected={expected_flags}")
+                        continue
+
+                # Extract address (segment:offset format)
+                addr_match = re.search(r'addr\s*=\s*([0-9a-fA-F]+):([0-9a-fA-F]+)', next_line)
+                if addr_match:
+                    segment = int(addr_match.group(1), 16)
+                    offset = int(addr_match.group(2), 16)
+                    if debug:
+                        print(f"    [DEBUG] Found addr: segment={segment:04x}, offset={offset:08x}")
+                    # Return the offset (RVA calculation would need section info)
+                    # For now, just return the offset part
+                    return offset
+
+    if debug:
+        print(f"    [DEBUG] Symbol '{symbol_name}' not found in publics")
+    return None
+
+
 def parse_pdb_all_symbols(pdb_path, symbols_list, debug=False):
     """
     Parse PDB file to get offsets for all symbols.
 
+    Supports three types of symbols:
+    - struct_offset: Structure member offsets (e.g., "_EPROCESS->ObjectTable")
+    - var_offset: Global variable offsets (e.g., "PspCreateProcessNotifyRoutine")
+    - fn_offset: Function offsets (e.g., "ExReferenceCallBackBlock")
+
     Args:
         pdb_path: Path to the PDB file
-        symbols_list: List of symbol dicts with "name" and "symbol" keys
-                      Symbol can contain comma-separated fallbacks
+        symbols_list: List of symbol dicts with "name" and one of
+                      struct_offset/var_offset/fn_offset keys
         debug: Enable debug logging
 
     Returns:
         Dict mapping symbol name to offset (0xffffffff if symbol not found)
     """
-    output = run_llvm_pdbutil(pdb_path)
-    if output is None:
-        return None
+    # Check which types of symbols we need
+    need_types = any("struct_offset" in sym for sym in symbols_list)
+    need_publics = any("var_offset" in sym or "fn_offset" in sym for sym in symbols_list)
+
+    types_output = None
+    publics_output = None
+
+    if need_types:
+        types_output = run_llvm_pdbutil(pdb_path)
+        if types_output is None:
+            return None
+
+    if need_publics:
+        publics_output = run_llvm_pdbutil_publics(pdb_path)
+        if publics_output is None:
+            return None
 
     offsets = {}
     for sym in symbols_list:
         name = sym["name"]
-        symbol_str = sym["symbol"]
-
-        # Parse symbol with fallback support
-        alternatives = parse_symbol_with_fallback(symbol_str)
-
-        if debug:
-            if len(alternatives) > 1:
-                print(f"    [DEBUG] Parsing symbol: {symbol_str} (with {len(alternatives)} alternatives)")
-            else:
-                struct_name, member_name = alternatives[0]
-                print(f"    [DEBUG] Parsing symbol: {symbol_str} -> {struct_name}->{member_name}")
-
         offset = None
-        used_alternative = None
-        for struct_name, member_name in alternatives:
-            offset = parse_llvm_pdbutil_output(output, struct_name, member_name, debug)
-            if offset is not None:
-                used_alternative = f"{struct_name}->{member_name}"
-                break
 
-        if offset is None:
-            print(f"  Warning: Symbol not found: {symbol_str}, using 0xffffffff")
-            offset = 0xffffffff
+        if "struct_offset" in sym:
+            # Handle structure member offset
+            symbol_str = sym["struct_offset"]
 
-        if debug:
-            if len(alternatives) > 1 and used_alternative:
-                print(f"    [DEBUG] Result: {name} = 0x{offset:04x} (using {used_alternative})")
-            else:
+            # Parse symbol with fallback support
+            alternatives = parse_symbol_with_fallback(symbol_str)
+
+            if debug:
+                if len(alternatives) > 1:
+                    print(f"    [DEBUG] Parsing struct_offset: {symbol_str} (with {len(alternatives)} alternatives)")
+                else:
+                    struct_name, member_name = alternatives[0]
+                    print(f"    [DEBUG] Parsing struct_offset: {symbol_str} -> {struct_name}->{member_name}")
+
+            used_alternative = None
+            for struct_name, member_name in alternatives:
+                offset = parse_llvm_pdbutil_output(types_output, struct_name, member_name, debug)
+                if offset is not None:
+                    used_alternative = f"{struct_name}->{member_name}"
+                    break
+
+            if offset is None:
+                print(f"  Warning: struct_offset not found: {symbol_str}, using 0xffffffff")
+                offset = 0xffffffff
+
+            if debug:
+                if len(alternatives) > 1 and used_alternative:
+                    print(f"    [DEBUG] Result: {name} = 0x{offset:04x} (using {used_alternative})")
+                else:
+                    print(f"    [DEBUG] Result: {name} = 0x{offset:04x}")
+
+        elif "var_offset" in sym:
+            # Handle global variable offset
+            symbol_name = sym["var_offset"]
+
+            if debug:
+                print(f"    [DEBUG] Parsing var_offset: {symbol_name}")
+
+            offset = parse_public_symbol_offset(publics_output, symbol_name, "var", debug)
+
+            if offset is None:
+                print(f"  Warning: var_offset not found: {symbol_name}, using 0xffffffff")
+                offset = 0xffffffff
+
+            if debug:
+                print(f"    [DEBUG] Result: {name} = 0x{offset:04x}")
+
+        elif "fn_offset" in sym:
+            # Handle function offset
+            symbol_name = sym["fn_offset"]
+
+            if debug:
+                print(f"    [DEBUG] Parsing fn_offset: {symbol_name}")
+
+            offset = parse_public_symbol_offset(publics_output, symbol_name, "fn", debug)
+
+            if offset is None:
+                print(f"  Warning: fn_offset not found: {symbol_name}, using 0xffffffff")
+                offset = 0xffffffff
+
+            if debug:
                 print(f"    [DEBUG] Result: {name} = 0x{offset:04x}")
 
         offsets[name] = offset
