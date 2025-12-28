@@ -635,7 +635,7 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, debug=False):
         debug: Enable debug logging
 
     Returns:
-        Dict mapping symbol name to offset, or None if any symbol is missing
+        Dict mapping symbol name to offset (0xffffffff if symbol not found)
     """
     output = run_llvm_pdbutil(pdb_path)
     if output is None:
@@ -665,8 +665,8 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, debug=False):
                 break
 
         if offset is None:
-            print(f"  Error: Symbol not found: {symbol_str}")
-            return None
+            print(f"  Warning: Symbol not found: {symbol_str}, using 0xffffffff")
+            offset = 0xffffffff
 
         if debug:
             if len(alternatives) > 1 and used_alternative:
