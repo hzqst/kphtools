@@ -12,6 +12,10 @@ wget https://raw.githubusercontent.com/winsiderss/systeminformer/master/kphlib/k
 curl -O https://raw.githubusercontent.com/winsiderss/systeminformer/master/kphlib/kphdyn.xml
 ```
 
+```powershell
+powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/winsiderss/systeminformer/master/kphlib/kphdyn.xml' -OutFile kphdyn.xml
+```
+
 ### Requirements
 
 Python packages:
