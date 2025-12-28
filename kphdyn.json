@@ -1,0 +1,139 @@
+[
+    {
+        "file" : [ "ntoskrnl.exe", "ntkrla57.exe" ],
+        "symbols": [
+            {
+                "name" : "EgeGuid",
+                "symbol" : "_ETW_GUID_ENTRY->Guid"
+            },
+            {
+                "name" : "EpObjectTable",
+                "symbol" : "_EPROCESS->ObjectTable"
+            },
+            {
+                "name" : "EreGuidEntry",
+                "symbol" : "_ETW_REG_ENTRY->GuidEntry"
+            },
+            {
+                "name" : "HtHandleContentionEvent",
+                "symbol" : "_HANDLE_TABLE->HandleContentionEvent"
+            },
+            {
+                "name" : "OtName",
+                "symbol" : "_OBJECT_TYPE->Name"
+            },
+            {
+                "name" : "OtIndex",
+                "symbol" : "_OBJECT_TYPE->Index"
+            },
+            {
+                "name" : "ObDecodeShift",
+                "symbol" : "_HANDLE_TABLE_ENTRY->ObjectPointerBits"
+            },
+            {
+                "name" : "ObAttributesShift",
+                "symbol" : "_HANDLE_TABLE_ENTRY->Attributes"
+            },
+            {
+                "name" : "AlpcCommunicationInfo",
+                "symbol" : "_ALPC_PORT->CommunicationInfo"
+            },
+            {
+                "name" : "AlpcOwnerProcess",
+                "symbol" : "_ALPC_PORT->OwnerProcess"
+            },
+            {
+                "name" : "AlpcConnectionPort",
+                "symbol" : "_ALPC_COMMUNICATION_INFO->ConnectionPort"
+            },
+            {
+                "name" : "AlpcServerCommunicationPort",
+                "symbol" : "_ALPC_COMMUNICATION_INFO->ServerCommunicationPort"
+            },
+            {
+                "name" : "AlpcClientCommunicationPort",
+                "symbol" : "_ALPC_COMMUNICATION_INFO->ClientCommunicationPort"
+            },
+            {
+                "name" : "AlpcHandleTable",
+                "symbol" : "_ALPC_COMMUNICATION_INFO->HandleTable"
+            },
+            {
+                "name" : "AlpcHandleTableLock",
+                "symbol" : "_ALPC_HANDLE_TABLE->Lock"
+            },
+            {
+                "name" : "AlpcAttributes",
+                "symbol" : "_ALPC_PORT->PortAttributes"
+            },
+            {
+                "name" : "AlpcAttributesFlags",
+                "symbol" : "_ALPC_PORT_ATTRIBUTES->Flags"
+            },
+            {
+                "name" : "AlpcPortContext",
+                "symbol" : "_ALPC_PORT->PortContext"
+            },
+            {
+                "name" : "AlpcPortObjectLock",
+                "symbol" : "_ALPC_PORT->PortObjectLock"
+            },
+            {
+                "name" : "AlpcSequenceNo",
+                "symbol" : "_ALPC_PORT->SequenceNo"
+            },
+            {
+                "name" : "AlpcState",
+                "symbol" : "_ALPC_PORT->u1.State"
+            },
+            {
+                "name" : "KtReadOperationCount",
+                "symbol" : "_KTHREAD->ReadOperationCount"
+            },
+            {
+                "name" : "KtWriteOperationCount",
+                "symbol" : "_KTHREAD->WriteOperationCount"
+            },
+            {
+                "name" : "KtOtherOperationCount",
+                "symbol" : "_KTHREAD->OtherOperationCount"
+            },
+            {
+                "name" : "KtReadTransferCount",
+                "symbol" : "_KTHREAD->ReadTransferCount"
+            },
+            {
+                "name" : "KtWriteTransferCount",
+                "symbol" : "_KTHREAD->WriteTransferCount"
+            },
+            {
+                "name" : "KtOtherTransferCount",
+                "symbol" : "_KTHREAD->OtherTransferCount"
+            },
+            {
+                "name" : "MmSectionControlArea",
+                "symbol" : "_SECTION->u1.ControlArea"
+            },
+            {
+                "name" : "MmControlAreaListHead",
+                "symbol" : "_CONTROL_AREA->ListHead"
+            },
+            {
+                "name" : "MmControlAreaLock",
+                "symbol" : "_CONTROL_AREA->ControlAreaLock"
+            },
+            {
+                "name" : "EpSectionObject",
+                "symbol" : "_EPROCESS->SectionObject"
+            },
+            {
+                "name" : "EpProtection",
+                "symbol" : "_EPROCESS->Protection"
+            },
+            {
+                "name" : "KtPrevMode",
+                "symbol" : "_KTHREAD->PreviousMode"
+            }
+        ]
+    }
+]

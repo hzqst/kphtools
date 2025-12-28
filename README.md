@@ -87,18 +87,55 @@ C:\Symbols\amd64\ntoskrnl.exe.10.0.10240.16393\ntkrnlmp.pdb
 ...others
 ```
 
-## Adding new symbol to kphdyn.xml
+## Update symbols in kphdyn.xml
 
-```
-python update_symbols.py -xml="path/to/kphdyn.xml" -symbol="EPROCESS->Protection" -symname="EpProtection"
+Updates field offsets in `kphdyn.xml` by parsing PDB files using `llvm-pdbutil`.
+
+### Requirements
+
+- `llvm-pdbutil` must be available in system PATH (part of LLVM tools)
+
+### Usage
+
+```bash
+python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json
 ```
 
-Adds offset with `EpProtection` to `kphdyn.xml`
+### Configuration (kphdyn.json)
 
+The JSON config file specifies which files to process and which symbols to extract:
+
+```json
+[
+    {
+        "file" : [ "ntoskrnl.exe", "ntkrla57.exe" ],
+        "symbols": [
+            {
+                "name" : "EpObjectTable",
+                "symbol" : "_EPROCESS->ObjectTable"
+            },
+            {
+                "name" : "EpSectionObject",
+                "symbol" : "_EPROCESS->SectionObject"
+            }
+        ]
+    }
+]
 ```
-<fields id="15">
-        //......others
-        <field value="0x0672" name="EpProtection" />
+
+### Output
+
+For each `<data>` entry matching the specified files, the script:
+1. Parses the corresponding PDB file to extract all symbol offsets
+2. Assigns a `<fields>` ID (reuses existing ID if offsets match exactly)
+3. Updates the `<data>` entry to reference the correct `<fields>` ID
+4. Removes orphan `<fields>` elements that are no longer referenced
+
+```xml
+<data arch="amd64" version="10.0.10240.16384" file="ntoskrnl.exe" ...>1</data>
+<fields id="1">
+    <field value="0x0418" name="EpObjectTable"/>
+    <field value="0x03b8" name="EpSectionObject"/>
 </fields>
 ```
 
