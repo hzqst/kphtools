@@ -74,7 +74,12 @@ def parse_args():
         default=DEFAULT_SYMBOL_SERVER_URL,
         help=f"Symbol server URL (default: {DEFAULT_SYMBOL_SERVER_URL}). Can be overridden by KPHTOOLS_SYMBOL_SERVER environment variable."
     )
-    
+    parser.add_argument(
+        "-fast",
+        action="store_true",
+        help="Fast mode: skip entries if known PDB files already exist (ntoskrnl.exe -> ntkrnlmp.pdb/ntoskrnl.pdb, ntkrla57.exe -> ntkrla57.pdb)"
+    )
+
     args = parser.parse_args()
     
     # Check XML environment variable first, then fallback to command line argument
@@ -336,22 +341,59 @@ def download_pdb(pdb_info, target_dir):
     return download_file(url, target_path)
 
 
-def process_entry(entry, symbol_dir):
+def check_fast_skip(entry, symbol_dir):
     """
-    Process a single entry: download PE, parse PDB info, download PDB.
-    
+    Check if an entry can be skipped in fast mode.
+
     Args:
         entry: Dictionary with file info
         symbol_dir: Base directory to save symbols
-        
+
+    Returns:
+        True if the entry should be skipped, False otherwise
+    """
+    file_name = entry["file"].lower()
+    version = entry["version"]
+    arch = entry["arch"]
+
+    target_dir = os.path.join(symbol_dir, arch, f"{entry['file']}.{version}")
+
+    if file_name == "ntoskrnl.exe":
+        # Check for ntkrnlmp.pdb or ntoskrnl.pdb
+        if os.path.exists(os.path.join(target_dir, "ntkrnlmp.pdb")):
+            return True
+        if os.path.exists(os.path.join(target_dir, "ntoskrnl.pdb")):
+            return True
+    elif file_name == "ntkrla57.exe":
+        # Check for ntkrla57.pdb
+        if os.path.exists(os.path.join(target_dir, "ntkrla57.pdb")):
+            return True
+
+    return False
+
+
+def process_entry(entry, symbol_dir, fast_mode=False):
+    """
+    Process a single entry: download PE, parse PDB info, download PDB.
+
+    Args:
+        entry: Dictionary with file info
+        symbol_dir: Base directory to save symbols
+        fast_mode: If True, skip entries where known PDB files already exist
+
     Returns:
         True if successful, False otherwise
     """
     file_name = entry["file"]
     version = entry["version"]
     arch = entry["arch"]
-    
+
     print(f"\nProcessing: {file_name} {version} ({arch})")
+
+    # Fast mode: skip if known PDB files already exist
+    if fast_mode and check_fast_skip(entry, symbol_dir):
+        print(f"  [Fast mode] PDB already exists, skipping")
+        return True
     
     # Step 1: Download PE file
     pe_path = download_pe(entry, symbol_dir)
@@ -380,42 +422,45 @@ def process_entry(entry, symbol_dir):
 def main():
     """Main entry point."""
     args = parse_args()
-    
+
     xml_path = args.xml
     symbol_dir = args.symboldir
     arch_filter = args.arch
     version_filter = args.version
-    
+    fast_mode = args.fast
+
     # Validate XML file exists
     if not os.path.exists(xml_path):
         print(f"Error: XML file not found: {xml_path}")
         sys.exit(1)
-    
+
     # Create symbol directory if needed
     os.makedirs(symbol_dir, exist_ok=True)
-    
+
     print(f"XML file: {xml_path}")
     print(f"Symbol directory: {symbol_dir}")
     if arch_filter:
         print(f"Architecture filter: {arch_filter}")
     if version_filter:
         print(f"Version filter: {version_filter}")
-    
+    if fast_mode:
+        print(f"Fast mode: enabled")
+
     # Parse XML
     print("\nParsing XML...")
     entries = parse_xml(xml_path, arch_filter, version_filter)
     print(f"Found {len(entries)} entries to process")
-    
+
     if not entries:
         print("No entries match the specified filters.")
         sys.exit(0)
-    
+
     # Process each entry
     success_count = 0
     fail_count = 0
-    
+
     for entry in entries:
-        if process_entry(entry, symbol_dir):
+        if process_entry(entry, symbol_dir, fast_mode):
             success_count += 1
         else:
             fail_count += 1
