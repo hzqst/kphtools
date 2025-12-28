@@ -470,7 +470,7 @@ def main():
     print(f"Completed: {success_count} successful, {fail_count} failed")
     
     if fail_count > 0:
-        sys.exit(-1)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
