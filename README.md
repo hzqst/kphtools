@@ -212,11 +212,13 @@ The JSON config file specifies which files to process and which symbols to extra
         "symbols": [
             {
                 "name" : "EpObjectTable",
-                "struct_offset" : "_EPROCESS->ObjectTable"
+                "struct_offset" : "_EPROCESS->ObjectTable",
+                "type" : "uint16"
             },
             {
                 "name" : "EpSectionObject",
-                "struct_offset" : "_EPROCESS->SectionObject"
+                "struct_offset" : "_EPROCESS->SectionObject",
+                "type" : "uint16"
             }
         ]
     }
