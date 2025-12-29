@@ -76,14 +76,23 @@ C:\Symbols\amd64\ntoskrnl.exe.10.0.10240.16393\ntkrnlmp.pdb
 
 Updates field offsets in `kphdyn.xml` by parsing PDB files using `llvm-pdbutil`.
 
+Also supports **syncfile mode** to scan symbol directory and add missing entries to XML.
+
 ### Requirements
 
 - `llvm-pdbutil` must be available in system PATH (part of LLVM tools)
+- `pefile` Python package required for syncfile mode (`pip install pefile`)
 
 ### Usage
 
+**Normal mode** - Update symbol offsets from PDB files:
 ```bash
 python update_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" -json="path/to/kphdyn.json"
+```
+
+**Syncfile mode** - Scan symbol directory and add missing entries:
+```bash
+python update_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" -syncfile
 ```
 
 ### Optional Arguments
@@ -92,27 +101,104 @@ python update_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" -json
 - `-pdbutil`: Path to llvm-pdbutil executable (default: search in PATH)
 - `-outxml`: Path to output XML file (default: overwrite input XML file)
 - `-debug`: Enable debug logging for symbol parsing
+- `-syncfile`: Sync PE files from symbol directory to XML (add missing entries)
+- `-fast`: Fast mode for syncfile - only parse PE when entry is missing
 
 ### Examples
 
+**Normal mode examples:**
+
 Update and overwrite the original file:
+
 ```bash
 python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json"
 ```
 
 Save to a different output file:
+
 ```bash
 python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -outxml="kphdyn_updated.xml"
 ```
 
 Process only a specific SHA256 hash:
+
 ```bash
 python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -sha256="abc123..."
 ```
 
 Use custom llvm-pdbutil path:
+
 ```bash
 python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -pdbutil="/path/to/llvm-pdbutil"
+```
+
+**Syncfile mode examples:**
+
+Scan symbol directory and add missing entries:
+
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -syncfile
+```
+
+Use fast mode (only parse PE when entry is missing):
+
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -syncfile -fast
+```
+
+Save to a different output file:
+
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -syncfile -outxml="kphdyn_updated.xml"
+```
+
+### Syncfile Mode Details
+
+The syncfile mode scans the symbol directory for PE files (exe/dll/sys) and adds missing entries to the XML:
+
+**How it works:**
+
+1. Scans all PE files in the symbol directory (e.g., `C:/Symbols/amd64/ntoskrnl.exe.10.0.16299.551/ntoskrnl.exe`)
+2. Extracts metadata from file path: `arch`, `file`, `version`
+3. Checks if a matching `<data>` entry exists in XML (by arch + file + version)
+4. If the entry doesn't exist:
+   - Parses PE file to extract `hash` (SHA256), `timestamp`, and `size`
+   - Finds the insertion position (after the closest smaller version)
+   - Creates new entry with `fields id="0"` (not yet resolved)
+5. Skips entries that already exist in XML
+
+**Fast mode (`-fast`):**
+
+In normal syncfile mode, all PE files are parsed upfront. With `-fast` flag, PE parsing is deferred until an entry is confirmed to be missing, which can significantly speed up the process when most entries already exist.
+
+**Expected symbol directory structure:**
+
+```text
+C:/Symbols/
+├── amd64/
+│   ├── ntoskrnl.exe.10.0.16299.551/
+│   │   ├── ntoskrnl.exe
+│   │   └── ntkrnlmp.pdb
+│   └── ntkrla57.exe.10.0.20348.4529/
+│       ├── ntkrla57.exe
+│       └── ntkrla57.pdb
+└── arm64/
+    └── ntoskrnl.exe.10.0.16299.1004/
+        ├── ntoskrnl.exe
+        └── ntkrnlmp.pdb
+```
+
+**Output example:**
+
+```text
+Scanning symbol directory: C:/Symbols
+  Found 3071 PE files
+
+[1457/3071] amd64/ntoskrnl.exe v10.0.19041.5070
+  Entry missing, parsing PE...
+  Added new entry after version 10.0.19041.5007
+
+Summary: 2 added, 3069 skipped, 0 failed
 ```
 
 ### Configuration (kphdyn.json)
