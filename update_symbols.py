@@ -8,15 +8,16 @@ Usage:
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -sha256 <hash>
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -pdbutil /path/to/llvm-pdbutil
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -outxml kphdyn_updated.xml
 
 JSON Config Format:
     [
         {
             "file": ["ntoskrnl.exe", "ntkrla57.exe"],
             "symbols": [
-                {"name": "EpObjectTable", "struct_offset": "_EPROCESS->ObjectTable"},
-                {"name": "PspNotify", "var_offset": "PspCreateProcessNotifyRoutine"},
-                {"name": "ExRefCallback", "fn_offset": "ExReferenceCallBackBlock"}
+                {"name": "EpObjectTable", "struct_offset": "_EPROCESS->ObjectTable", "type": "uint16"},
+                {"name": "PspNotify", "var_offset": "PspCreateProcessNotifyRoutine", "type": "uint32"},
+                {"name": "ExRefCallback", "fn_offset": "ExReferenceCallBackBlock", "type": "uint32"}
             ]
         }
     ]
@@ -26,9 +27,14 @@ Symbol Types:
     - var_offset: Global variable offset (e.g., "PspCreateProcessNotifyRoutine")
     - fn_offset: Function offset (e.g., "ExReferenceCallBackBlock")
 
+Data Types:
+    - type: "uint16" - Output as 4-digit hex (0x0000-0xffff), max value 0xffff
+    - type: "uint32" - Output as 8-digit hex (0x00000000-0xffffffff), max value 0xffffffff
+
 Optional Arguments:
     -sha256: Only process entries with this SHA256 hash value (case-insensitive)
     -pdbutil: Path to llvm-pdbutil executable (default: search in PATH)
+    -outxml: Path to output XML file (default: overwrite input XML file)
     -debug: Enable debug logging for symbol parsing
 
 Requirements:
@@ -88,6 +94,10 @@ def parse_args():
     parser.add_argument(
         "-pdbutil",
         help="Path to llvm-pdbutil executable (default: search in PATH)"
+    )
+    parser.add_argument(
+        "-outxml",
+        help="Path to output XML file (default: overwrite input XML file)"
     )
 
     args = parser.parse_args()
@@ -149,6 +159,13 @@ def load_json_config(json_path):
         found_keys = [k for k in offset_keys if k in sym]
         if len(found_keys) != 1:
             print(f"Error: Each symbol must have exactly one of {offset_keys}: {sym}")
+            sys.exit(1)
+        # Validate type field
+        if "type" not in sym:
+            print(f"Error: Each symbol must have 'type' key: {sym}")
+            sys.exit(1)
+        if sym["type"] not in ["uint16", "uint32"]:
+            print(f"Error: 'type' must be 'uint16' or 'uint32': {sym}")
             sys.exit(1)
 
     return file_list, symbols_list
@@ -249,7 +266,7 @@ def collect_existing_fields(root):
             name = field_elem.get("name")
             value = field_elem.get("value")
             if name and value:
-                # Parse hex value like "0x0418"
+                # Parse hex value like "0x0418" or "0x00001234"
                 try:
                     offset = int(value, 16)
                     field_dict[name] = offset
@@ -829,6 +846,8 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, pdbutil_path=None, debug=False
     offsets = {}
     for sym in symbols_list:
         name = sym["name"]
+        sym_type = sym["type"]
+        max_value = 0xffff if sym_type == "uint16" else 0xffffffff
         offset = None
 
         if "struct_offset" in sym:
@@ -853,14 +872,19 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, pdbutil_path=None, debug=False
                     break
 
             if offset is None:
-                print(f"  Warning: struct_offset not found: {symbol_str}, using 0xffffffff")
-                offset = 0xffffffff
+                print(f"  Warning: struct_offset not found: {symbol_str}, using {max_value:#x}")
+                offset = max_value
+            elif offset > max_value:
+                print(f"  Warning: offset {offset:#x} exceeds {sym_type} max ({max_value:#x}), clamping to {max_value:#x}")
+                offset = max_value
 
             if debug:
                 if len(alternatives) > 1 and used_alternative:
-                    print(f"    [DEBUG] Result: {name} = 0x{offset:04x} (using {used_alternative})")
+                    width = 4 if sym_type == "uint16" else 8
+                    print(f"    [DEBUG] Result: {name} = {offset:#0{width+2}x} (using {used_alternative})")
                 else:
-                    print(f"    [DEBUG] Result: {name} = 0x{offset:04x}")
+                    width = 4 if sym_type == "uint16" else 8
+                    print(f"    [DEBUG] Result: {name} = {offset:#0{width+2}x}")
 
         elif "var_offset" in sym:
             # Handle global variable offset
@@ -872,11 +896,15 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, pdbutil_path=None, debug=False
             offset = parse_public_symbol_offset(publics_output, symbol_name, "var", debug)
 
             if offset is None:
-                print(f"  Warning: var_offset not found: {symbol_name}, using 0xffffffff")
-                offset = 0xffffffff
+                print(f"  Warning: var_offset not found: {symbol_name}, using {max_value:#x}")
+                offset = max_value
+            elif offset > max_value:
+                print(f"  Warning: offset {offset:#x} exceeds {sym_type} max ({max_value:#x}), clamping to {max_value:#x}")
+                offset = max_value
 
             if debug:
-                print(f"    [DEBUG] Result: {name} = 0x{offset:04x}")
+                width = 4 if sym_type == "uint16" else 8
+                print(f"    [DEBUG] Result: {name} = {offset:#0{width+2}x}")
 
         elif "fn_offset" in sym:
             # Handle function offset
@@ -888,11 +916,15 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, pdbutil_path=None, debug=False
             offset = parse_public_symbol_offset(publics_output, symbol_name, "fn", debug)
 
             if offset is None:
-                print(f"  Warning: fn_offset not found: {symbol_name}, using 0xffffffff")
-                offset = 0xffffffff
+                print(f"  Warning: fn_offset not found: {symbol_name}, using {max_value:#x}")
+                offset = max_value
+            elif offset > max_value:
+                print(f"  Warning: offset {offset:#x} exceeds {sym_type} max ({max_value:#x}), clamping to {max_value:#x}")
+                offset = max_value
 
             if debug:
-                print(f"    [DEBUG] Result: {name} = 0x{offset:04x}")
+                width = 4 if sym_type == "uint16" else 8
+                print(f"    [DEBUG] Result: {name} = {offset:#0{width+2}x}")
 
         offsets[name] = offset
 
@@ -953,7 +985,15 @@ def create_fields_element(root, fields_id, offsets, symbols_list):
         name = sym["name"]
         if name in offsets:
             field_elem = ET.SubElement(fields_elem, "field")
-            field_elem.set("value", f"0x{offsets[name]:04x}")
+            # Format based on type
+            sym_type = sym["type"]
+            offset_value = offsets[name]
+            if sym_type == "uint16":
+                # uint16: 4-digit hex with max 0xffff
+                field_elem.set("value", f"0x{offset_value:04x}")
+            else:  # uint32
+                # uint32: 8-digit hex with max 0xffffffff
+                field_elem.set("value", f"0x{offset_value:08x}")
             field_elem.set("name", name)
 
 
@@ -1065,6 +1105,7 @@ def main():
     debug = args.debug
     sha256_filter = args.sha256
     pdbutil_path = args.pdbutil
+    outxml_path = args.outxml if args.outxml else args.xml  # Use outxml if provided, otherwise overwrite input
 
     # Validate paths
     if not os.path.exists(xml_path):
@@ -1185,8 +1226,8 @@ def main():
         print(f"\nRemoved {removed_count} orphan fields sections")
 
     # Save XML
-    print(f"\nSaving XML to: {xml_path}")
-    save_xml_with_header(root, xml_path)
+    print(f"\nSaving XML to: {outxml_path}")
+    save_xml_with_header(root, outxml_path)
 
     # Summary
     print(f"\n{'='*50}")

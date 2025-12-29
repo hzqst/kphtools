@@ -86,6 +86,35 @@ Updates field offsets in `kphdyn.xml` by parsing PDB files using `llvm-pdbutil`.
 python update_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" -json="path/to/kphdyn.json"
 ```
 
+### Optional Arguments
+
+- `-sha256`: Only process entries with this SHA256 hash value (case-insensitive)
+- `-pdbutil`: Path to llvm-pdbutil executable (default: search in PATH)
+- `-outxml`: Path to output XML file (default: overwrite input XML file)
+- `-debug`: Enable debug logging for symbol parsing
+
+### Examples
+
+Update and overwrite the original file:
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json"
+```
+
+Save to a different output file:
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -outxml="kphdyn_updated.xml"
+```
+
+Process only a specific SHA256 hash:
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -sha256="abc123..."
+```
+
+Use custom llvm-pdbutil path:
+```bash
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -pdbutil="/path/to/llvm-pdbutil"
+```
+
 ### Configuration (kphdyn.json)
 
 The JSON config file specifies which files to process and which symbols to extract:

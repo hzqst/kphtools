@@ -4,143 +4,178 @@
         "symbols": [
             {
                 "name" : "EgeGuid",
-                "struct_offset" : "_ETW_GUID_ENTRY->Guid"
+                "struct_offset" : "_ETW_GUID_ENTRY->Guid",
+                "type" : "uint16"
             },
             {
                 "name" : "EpObjectTable",
-                "struct_offset" : "_EPROCESS->ObjectTable"
+                "struct_offset" : "_EPROCESS->ObjectTable",
+                "type" : "uint16"
             },
             {
                 "name" : "EreGuidEntry",
-                "struct_offset" : "_ETW_REG_ENTRY->GuidEntry"
+                "struct_offset" : "_ETW_REG_ENTRY->GuidEntry",
+                "type" : "uint16"
             },
             {
                 "name" : "HtHandleContentionEvent",
-                "struct_offset" : "_HANDLE_TABLE->HandleContentionEvent"
+                "struct_offset" : "_HANDLE_TABLE->HandleContentionEvent",
+                "type" : "uint16"
             },
             {
                 "name" : "OtName",
-                "struct_offset" : "_OBJECT_TYPE->Name"
+                "struct_offset" : "_OBJECT_TYPE->Name",
+                "type" : "uint16"
             },
             {
                 "name" : "OtIndex",
-                "struct_offset" : "_OBJECT_TYPE->Index"
+                "struct_offset" : "_OBJECT_TYPE->Index",
+                "type" : "uint16"
             },
             {
                 "name" : "ObDecodeShift",
-                "struct_offset" : "_HANDLE_TABLE_ENTRY->ObjectPointerBits"
+                "struct_offset" : "_HANDLE_TABLE_ENTRY->ObjectPointerBits",
+                "type" : "uint16"
             },
             {
                 "name" : "ObAttributesShift",
-                "struct_offset" : "_HANDLE_TABLE_ENTRY->Attributes"
+                "struct_offset" : "_HANDLE_TABLE_ENTRY->Attributes",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcCommunicationInfo",
-                "struct_offset" : "_ALPC_PORT->CommunicationInfo"
+                "struct_offset" : "_ALPC_PORT->CommunicationInfo",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcOwnerProcess",
-                "struct_offset" : "_ALPC_PORT->OwnerProcess"
+                "struct_offset" : "_ALPC_PORT->OwnerProcess",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcConnectionPort",
-                "struct_offset" : "_ALPC_COMMUNICATION_INFO->ConnectionPort"
+                "struct_offset" : "_ALPC_COMMUNICATION_INFO->ConnectionPort",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcServerCommunicationPort",
-                "struct_offset" : "_ALPC_COMMUNICATION_INFO->ServerCommunicationPort"
+                "struct_offset" : "_ALPC_COMMUNICATION_INFO->ServerCommunicationPort",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcClientCommunicationPort",
-                "struct_offset" : "_ALPC_COMMUNICATION_INFO->ClientCommunicationPort"
+                "struct_offset" : "_ALPC_COMMUNICATION_INFO->ClientCommunicationPort",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcHandleTable",
-                "struct_offset" : "_ALPC_COMMUNICATION_INFO->HandleTable"
+                "struct_offset" : "_ALPC_COMMUNICATION_INFO->HandleTable",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcHandleTableLock",
-                "struct_offset" : "_ALPC_HANDLE_TABLE->Lock"
+                "struct_offset" : "_ALPC_HANDLE_TABLE->Lock",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcAttributes",
-                "struct_offset" : "_ALPC_PORT->PortAttributes"
+                "struct_offset" : "_ALPC_PORT->PortAttributes",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcAttributesFlags",
-                "struct_offset" : "_ALPC_PORT_ATTRIBUTES->Flags"
+                "struct_offset" : "_ALPC_PORT_ATTRIBUTES->Flags",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcPortContext",
-                "struct_offset" : "_ALPC_PORT->PortContext"
+                "struct_offset" : "_ALPC_PORT->PortContext",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcPortObjectLock",
-                "struct_offset" : "_ALPC_PORT->PortObjectLock"
+                "struct_offset" : "_ALPC_PORT->PortObjectLock",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcSequenceNo",
-                "struct_offset" : "_ALPC_PORT->SequenceNo"
+                "struct_offset" : "_ALPC_PORT->SequenceNo",
+                "type" : "uint16"
             },
             {
                 "name" : "AlpcState",
-                "struct_offset" : "_ALPC_PORT->u1.State"
+                "struct_offset" : "_ALPC_PORT->u1.State",
+                "type" : "uint16"
             },
             {
                 "name" : "KtReadOperationCount",
-                "struct_offset" : "_KTHREAD->ReadOperationCount"
+                "struct_offset" : "_KTHREAD->ReadOperationCount",
+                "type" : "uint16"
             },
             {
                 "name" : "KtWriteOperationCount",
-                "struct_offset" : "_KTHREAD->WriteOperationCount"
+                "struct_offset" : "_KTHREAD->WriteOperationCount",
+                "type" : "uint16"
             },
             {
                 "name" : "KtOtherOperationCount",
-                "struct_offset" : "_KTHREAD->OtherOperationCount"
+                "struct_offset" : "_KTHREAD->OtherOperationCount",
+                "type" : "uint16"
             },
             {
                 "name" : "KtReadTransferCount",
-                "struct_offset" : "_KTHREAD->ReadTransferCount"
+                "struct_offset" : "_KTHREAD->ReadTransferCount",
+                "type" : "uint16"
             },
             {
                 "name" : "KtWriteTransferCount",
-                "struct_offset" : "_KTHREAD->WriteTransferCount"
+                "struct_offset" : "_KTHREAD->WriteTransferCount",
+                "type" : "uint16"
             },
             {
                 "name" : "KtOtherTransferCount",
-                "struct_offset" : "_KTHREAD->OtherTransferCount"
+                "struct_offset" : "_KTHREAD->OtherTransferCount",
+                "type" : "uint16"
             },
             {
                 "name" : "MmSectionControlArea",
-                "struct_offset" : "_SECTION->u1.ControlArea,_SECTION_OBJECT->Segment"
+                "struct_offset" : "_SECTION->u1.ControlArea,_SECTION_OBJECT->Segment",
+                "type" : "uint16"
             },
             {
                 "name" : "MmControlAreaListHead",
-                "struct_offset" : "_CONTROL_AREA->ListHead"
+                "struct_offset" : "_CONTROL_AREA->ListHead",
+                "type" : "uint16"
             },
             {
                 "name" : "MmControlAreaLock",
-                "struct_offset" : "_CONTROL_AREA->ControlAreaLock"
+                "struct_offset" : "_CONTROL_AREA->ControlAreaLock",
+                "type" : "uint16"
             },
             {
                 "name" : "EpSectionObject",
-                "struct_offset" : "_EPROCESS->SectionObject"
+                "struct_offset" : "_EPROCESS->SectionObject",
+                "type" : "uint16"
             },
             {
                 "name" : "EpProtection",
-                "struct_offset" : "_EPROCESS->Protection"
+                "struct_offset" : "_EPROCESS->Protection",
+                "type" : "uint16"
             },
             {
                 "name" : "PspCreateProcessNotifyRoutine",
-                "var_offset" : "PspCreateProcessNotifyRoutine"
+                "var_offset" : "PspCreateProcessNotifyRoutine",
+                "type" : "uint32"
             },
             {
                 "name" : "ExReferenceCallBackBlock",
-                "fn_offset" : "ExReferenceCallBackBlock"
+                "fn_offset" : "ExReferenceCallBackBlock",
+                "type" : "uint32"
             },
             {
                 "name" : "ExDereferenceCallBackBlock",
-                "fn_offset" : "ExDereferenceCallBackBlock"
+                "fn_offset" : "ExDereferenceCallBackBlock",
+                "type" : "uint32"
             }
         ]
     }
