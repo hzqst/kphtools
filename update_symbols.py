@@ -5,10 +5,16 @@ Symbol Update Script for KPH Dynamic Data
 Updates field offsets in kphdyn.xml by parsing PDB files using llvm-pdbutil.
 
 Usage:
+    # Normal mode: Update symbol offsets from PDB files
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -sha256 <hash>
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -pdbutil /path/to/llvm-pdbutil
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -outxml kphdyn_updated.xml
+
+    # Syncfile mode: Sync PE files from symbol directory to XML entries
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -syncfile
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -syncfile -fast
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -syncfile -outxml kphdyn_updated.xml
 
 JSON Config Format:
     [
@@ -36,9 +42,23 @@ Optional Arguments:
     -pdbutil: Path to llvm-pdbutil executable (default: search in PATH)
     -outxml: Path to output XML file (default: overwrite input XML file)
     -debug: Enable debug logging for symbol parsing
+    -syncfile: Sync PE files from symbol directory to XML (add missing entries)
+    -fast: Fast mode for syncfile - only parse PE when entry is missing
+
+Syncfile Mode:
+    Scans the symbol directory for PE files (exe/dll/sys) and adds missing
+    entries to the XML. For each PE file found:
+    - Extracts arch/file/version from the directory path
+    - If the entry doesn't exist in XML, parses PE to get hash/timestamp/size
+    - Inserts new entry after the closest smaller version
+    - Sets fields ID to 0 (not yet resolved)
+
+    The -fast flag skips PE parsing for entries that already exist,
+    only parsing when a new entry needs to be added.
 
 Requirements:
     - llvm-pdbutil must be available in system PATH or specified via -pdbutil
+    - pefile module required for -syncfile mode (pip install pefile)
 """
 
 import json
@@ -47,7 +67,14 @@ import re
 import argparse
 import subprocess
 import sys
+import hashlib
 import xml.etree.ElementTree as ET
+
+try:
+    import pefile
+    HAS_PEFILE = True
+except ImportError:
+    HAS_PEFILE = False
 
 
 # XML header with copyright notice
@@ -79,8 +106,7 @@ def parse_args():
     )
     parser.add_argument(
         "-json",
-        required=True,
-        help="Path to the JSON config file (e.g., kphdyn.json)"
+        help="Path to the JSON config file (e.g., kphdyn.json). Required except in -syncfile mode"
     )
     parser.add_argument(
         "-debug",
@@ -99,6 +125,16 @@ def parse_args():
         "-outxml",
         help="Path to output XML file (default: overwrite input XML file)"
     )
+    parser.add_argument(
+        "-syncfile",
+        action="store_true",
+        help="Sync symbol files to XML entries (add missing entries)"
+    )
+    parser.add_argument(
+        "-fast",
+        action="store_true",
+        help="Fast mode: only parse PE content when entry is missing"
+    )
 
     args = parser.parse_args()
 
@@ -106,8 +142,8 @@ def parse_args():
         parser.error("-xml cannot be empty")
     if not args.symboldir:
         parser.error("-symboldir cannot be empty")
-    if not args.json:
-        parser.error("-json cannot be empty")
+    if not args.syncfile and not args.json:
+        parser.error("-json is required when not using -syncfile mode")
 
     return args
 
@@ -1053,6 +1089,331 @@ def remove_orphan_fields(root):
     return len(fields_to_remove)
 
 
+# =============================================================================
+# Syncfile Mode Functions
+# =============================================================================
+
+def parse_version(version_str):
+    """
+    Parse version string into comparable tuple.
+
+    Args:
+        version_str: Version string like "10.0.16299.551"
+
+    Returns:
+        Tuple of integers (major, minor, build, revision)
+    """
+    parts = version_str.split(".")
+    result = []
+    for part in parts:
+        try:
+            result.append(int(part))
+        except ValueError:
+            result.append(0)
+    # Pad to 4 elements
+    while len(result) < 4:
+        result.append(0)
+    return tuple(result[:4])
+
+
+def parse_file_path_info(file_path, symboldir):
+    """
+    Extract arch, filename, version from file path.
+
+    Args:
+        file_path: Full path to PE file
+        symboldir: Base symbol directory
+
+    Returns:
+        Dict with 'arch', 'file', 'version' keys, or None if parsing fails
+
+    Example:
+        Input: "symbols/amd64/ntoskrnl.exe.10.0.16299.551/ntoskrnl.exe"
+        Output: {'arch': 'amd64', 'file': 'ntoskrnl.exe', 'version': '10.0.16299.551'}
+    """
+    # Normalize paths
+    file_path = os.path.normpath(file_path)
+    symboldir = os.path.normpath(symboldir)
+
+    # Get relative path from symboldir
+    try:
+        rel_path = os.path.relpath(file_path, symboldir)
+    except ValueError:
+        return None
+
+    # Split into components
+    parts = rel_path.replace("\\", "/").split("/")
+    if len(parts) < 3:
+        return None
+
+    arch = parts[0]
+    version_dir = parts[1]  # e.g., "ntoskrnl.exe.10.0.16299.551"
+    filename = parts[2]      # e.g., "ntoskrnl.exe"
+
+    # Parse version from directory name
+    # Format: filename.version (e.g., "ntoskrnl.exe.10.0.16299.551")
+    if not version_dir.startswith(filename + "."):
+        return None
+
+    version = version_dir[len(filename) + 1:]  # Remove "filename." prefix
+
+    return {
+        "arch": arch,
+        "file": filename,
+        "version": version
+    }
+
+
+def parse_pe_info(pe_path):
+    """
+    Parse PE file to extract hash, timestamp, and size.
+
+    Args:
+        pe_path: Path to PE file
+
+    Returns:
+        Dict with 'sha256', 'timestamp', 'size' keys, or None on failure
+    """
+    if not HAS_PEFILE:
+        print("Error: pefile module is required for -syncfile mode")
+        print("Install it with: pip install pefile")
+        sys.exit(1)
+
+    try:
+        # Calculate SHA256
+        with open(pe_path, "rb") as f:
+            sha256 = hashlib.sha256(f.read()).hexdigest()
+
+        # Parse PE
+        pe = pefile.PE(pe_path, fast_load=True)
+        timestamp = pe.FILE_HEADER.TimeDateStamp
+        size = pe.OPTIONAL_HEADER.SizeOfImage
+        pe.close()
+
+        return {
+            "sha256": sha256,
+            "timestamp": timestamp,
+            "size": size
+        }
+    except Exception as e:
+        print(f"  Warning: Failed to parse PE file: {e}")
+        return None
+
+
+def find_data_entry(root, arch, file_name, version):
+    """
+    Find a data entry matching arch, file, and version.
+
+    Args:
+        root: XML root element
+        arch: Architecture (e.g., "amd64")
+        file_name: File name (e.g., "ntoskrnl.exe")
+        version: Version string (e.g., "10.0.16299.551")
+
+    Returns:
+        Matching data element, or None if not found
+    """
+    for data_elem in root.findall("data"):
+        if (data_elem.get("arch") == arch and
+            data_elem.get("file") == file_name and
+            data_elem.get("version") == version):
+            return data_elem
+    return None
+
+
+def find_insert_position(root, arch, file_name, version):
+    """
+    Find the position to insert a new data entry.
+
+    The new entry should be inserted after the entry with the closest
+    smaller version that has the same arch and file.
+
+    Args:
+        root: XML root element
+        arch: Architecture
+        file_name: File name
+        version: Version string
+
+    Returns:
+        Tuple of (index, after_elem) where:
+        - index: Position to insert (for list.insert())
+        - after_elem: Element to insert after (for reference), or None
+    """
+    target_ver = parse_version(version)
+    data_elems = root.findall("data")
+
+    best_idx = -1
+    best_ver = None
+    best_elem = None
+
+    for i, data_elem in enumerate(data_elems):
+        elem_arch = data_elem.get("arch")
+        elem_file = data_elem.get("file")
+        elem_ver_str = data_elem.get("version")
+
+        if elem_arch == arch and elem_file == file_name:
+            elem_ver = parse_version(elem_ver_str)
+            # Find the largest version that is smaller than target
+            if elem_ver < target_ver:
+                if best_ver is None or elem_ver > best_ver:
+                    best_ver = elem_ver
+                    best_idx = i
+                    best_elem = data_elem
+
+    if best_idx >= 0:
+        return best_idx + 1, best_elem
+    else:
+        # No smaller version found, find the first entry with same arch+file
+        # to insert before, or insert at the end
+        for i, data_elem in enumerate(data_elems):
+            if data_elem.get("arch") == arch and data_elem.get("file") == file_name:
+                return i, None
+        # No matching arch+file at all, insert at the end of data elements
+        return len(data_elems), None
+
+
+def create_data_entry(root, arch, file_name, version, hash_val, timestamp, size, insert_idx):
+    """
+    Create and insert a new data entry at the specified position.
+
+    Args:
+        root: XML root element
+        arch: Architecture
+        file_name: File name
+        version: Version string
+        hash_val: SHA256 hash
+        timestamp: TimeDateStamp from PE header
+        size: SizeOfImage from PE header
+        insert_idx: Index to insert at
+
+    Returns:
+        The newly created data element
+    """
+    data_elem = ET.Element("data")
+    data_elem.set("arch", arch)
+    data_elem.set("version", version)
+    data_elem.set("file", file_name)
+    data_elem.set("hash", hash_val)
+    data_elem.set("timestamp", f"0x{timestamp:08x}")
+    data_elem.set("size", f"0x{size:08x}")
+    data_elem.text = "0"  # Fields ID = 0 (not yet resolved)
+
+    # Insert at the correct position
+    root.insert(insert_idx, data_elem)
+
+    return data_elem
+
+
+def scan_symbol_directory(symboldir):
+    """
+    Scan symbol directory for PE files.
+
+    Args:
+        symboldir: Base symbol directory
+
+    Returns:
+        List of PE file paths
+    """
+    pe_files = []
+    pe_extensions = {".exe", ".dll", ".sys"}
+
+    for arch_dir in os.listdir(symboldir):
+        arch_path = os.path.join(symboldir, arch_dir)
+        if not os.path.isdir(arch_path):
+            continue
+
+        for version_dir in os.listdir(arch_path):
+            version_path = os.path.join(arch_path, version_dir)
+            if not os.path.isdir(version_path):
+                continue
+
+            for file_name in os.listdir(version_path):
+                file_ext = os.path.splitext(file_name)[1].lower()
+                if file_ext in pe_extensions:
+                    pe_files.append(os.path.join(version_path, file_name))
+
+    return pe_files
+
+
+def syncfile_main(args, root):
+    """
+    Main function for -syncfile mode.
+
+    Args:
+        args: Parsed command line arguments
+        root: XML root element
+
+    Returns:
+        Tuple of (added_count, skipped_count, failed_count)
+    """
+    symboldir = args.symboldir
+    fast_mode = args.fast
+
+    print(f"\nScanning symbol directory: {symboldir}")
+    pe_files = scan_symbol_directory(symboldir)
+    print(f"  Found {len(pe_files)} PE files")
+
+    if not pe_files:
+        print("No PE files found.")
+        return 0, 0, 0
+
+    added_count = 0
+    skipped_count = 0
+    failed_count = 0
+
+    # Sort PE files for consistent ordering
+    pe_files.sort()
+
+    for i, pe_path in enumerate(pe_files):
+        # Parse path info
+        path_info = parse_file_path_info(pe_path, symboldir)
+        if path_info is None:
+            print(f"\n[{i+1}/{len(pe_files)}] {pe_path}")
+            print(f"  Warning: Failed to parse path")
+            failed_count += 1
+            continue
+
+        arch = path_info["arch"]
+        file_name = path_info["file"]
+        version = path_info["version"]
+
+        # Check if entry exists
+        existing = find_data_entry(root, arch, file_name, version)
+        if existing is not None:
+            skipped_count += 1
+            continue
+
+        # Entry doesn't exist, need to add it
+        print(f"\n[{i+1}/{len(pe_files)}] {arch}/{file_name} v{version}")
+        print(f"  Entry missing, parsing PE...")
+
+        # Parse PE to get hash/timestamp/size
+        pe_info = parse_pe_info(pe_path)
+        if pe_info is None:
+            print(f"  Failed to parse PE")
+            failed_count += 1
+            continue
+
+        # Find insert position
+        insert_idx, after_elem = find_insert_position(root, arch, file_name, version)
+
+        # Create new entry
+        create_data_entry(
+            root, arch, file_name, version,
+            pe_info["sha256"], pe_info["timestamp"], pe_info["size"],
+            insert_idx
+        )
+
+        if after_elem is not None:
+            after_ver = after_elem.get("version")
+            print(f"  Added new entry after version {after_ver}")
+        else:
+            print(f"  Added new entry")
+        added_count += 1
+
+    return added_count, skipped_count, failed_count
+
+
 def save_xml_with_header(root, xml_path):
     """
     Save XML with proper header and formatting.
@@ -1101,10 +1462,6 @@ def main():
 
     xml_path = args.xml
     symboldir = args.symboldir
-    json_path = args.json
-    debug = args.debug
-    sha256_filter = args.sha256
-    pdbutil_path = args.pdbutil
     outxml_path = args.outxml if args.outxml else args.xml  # Use outxml if provided, otherwise overwrite input
 
     # Validate paths
@@ -1115,6 +1472,37 @@ def main():
     if not os.path.exists(symboldir):
         print(f"Error: Symbol directory not found: {symboldir}")
         sys.exit(1)
+
+    # Parse XML
+    print(f"Parsing XML: {xml_path}")
+    tree = ET.parse(xml_path)
+    root = tree.getroot()
+
+    # Handle syncfile mode
+    if args.syncfile:
+        print(f"Running in syncfile mode")
+        if args.fast:
+            print(f"  Fast mode: enabled")
+
+        added, skipped, failed = syncfile_main(args, root)
+
+        # Save XML
+        print(f"\nSaving XML to: {outxml_path}")
+        save_xml_with_header(root, outxml_path)
+
+        # Summary
+        print(f"\n{'='*50}")
+        print(f"Summary: {added} added, {skipped} skipped, {failed} failed")
+
+        if failed > 0:
+            sys.exit(1)
+        return
+
+    # Normal mode: update symbols from PDB
+    json_path = args.json
+    debug = args.debug
+    sha256_filter = args.sha256
+    pdbutil_path = args.pdbutil
 
     if pdbutil_path and not os.path.exists(pdbutil_path):
         print(f"Error: llvm-pdbutil not found at: {pdbutil_path}")
