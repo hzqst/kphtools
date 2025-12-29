@@ -7,6 +7,7 @@ Updates field offsets in kphdyn.xml by parsing PDB files using llvm-pdbutil.
 Usage:
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -sha256 <hash>
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -json kphdyn.json -pdbutil /path/to/llvm-pdbutil
 
 JSON Config Format:
     [
@@ -27,9 +28,11 @@ Symbol Types:
 
 Optional Arguments:
     -sha256: Only process entries with this SHA256 hash value (case-insensitive)
+    -pdbutil: Path to llvm-pdbutil executable (default: search in PATH)
+    -debug: Enable debug logging for symbol parsing
 
 Requirements:
-    - llvm-pdbutil must be available in system PATH
+    - llvm-pdbutil must be available in system PATH or specified via -pdbutil
 """
 
 import json
@@ -81,6 +84,10 @@ def parse_args():
     parser.add_argument(
         "-sha256",
         help="Only process entries with this SHA256 hash value"
+    )
+    parser.add_argument(
+        "-pdbutil",
+        help="Path to llvm-pdbutil executable (default: search in PATH)"
     )
 
     args = parser.parse_args()
@@ -271,12 +278,13 @@ def get_pdb_path(symboldir, arch, version):
     return pdb_path
 
 
-def run_llvm_pdbutil(pdb_path):
+def run_llvm_pdbutil(pdb_path, pdbutil_path=None):
     """
     Run llvm-pdbutil to dump type information.
 
     Args:
         pdb_path: Path to the PDB file
+        pdbutil_path: Optional path to llvm-pdbutil executable
 
     Returns:
         Output string, or None on failure
@@ -284,9 +292,12 @@ def run_llvm_pdbutil(pdb_path):
     if not os.path.exists(pdb_path):
         return None
 
+    # Use custom path or search in PATH
+    pdbutil_cmd = pdbutil_path if pdbutil_path else "llvm-pdbutil"
+
     try:
         result = subprocess.run(
-            ["llvm-pdbutil", "dump", "-types", pdb_path],
+            [pdbutil_cmd, "dump", "-types", pdb_path],
             capture_output=True,
             text=True,
             timeout=300  # 5 minute timeout
@@ -299,8 +310,12 @@ def run_llvm_pdbutil(pdb_path):
         return result.stdout
 
     except FileNotFoundError:
-        print("Error: llvm-pdbutil not found in PATH")
-        print("Please install LLVM tools and ensure llvm-pdbutil is in your PATH")
+        if pdbutil_path:
+            print(f"Error: llvm-pdbutil not found at: {pdbutil_path}")
+        else:
+            print("Error: llvm-pdbutil not found in PATH")
+            print("Please install LLVM tools and ensure llvm-pdbutil is in your PATH")
+            print("Or use -pdbutil to specify the path explicitly")
         sys.exit(1)
     except subprocess.TimeoutExpired:
         print(f"  Timeout while parsing PDB: {pdb_path}")
@@ -399,11 +414,12 @@ def find_member_offset(lines, struct_name, member_name, debug=False):
     # Step 1: Find the structure definition and get its field list ID
     field_list_id = None
 
-    # Try LF_STRUCTURE first
+    # Try LF_STRUCTURE or LF_STRUCTURE2 first
     for i, line in enumerate(lines):
-        if "LF_STRUCTURE" in line and f"`{struct_name}`" in line:
+        if ("LF_STRUCTURE " in line or "LF_STRUCTURE2 " in line) and f"`{struct_name}`" in line:
             if debug:
-                print(f"    [DEBUG] Found LF_STRUCTURE for '{struct_name}' at line {i}")
+                lf_type = "LF_STRUCTURE2" if "LF_STRUCTURE2" in line else "LF_STRUCTURE"
+                print(f"    [DEBUG] Found {lf_type} for '{struct_name}' at line {i}")
             for j in range(i + 1, min(i + 10, len(lines))):
                 next_line = lines[j]
                 if "forward ref" in next_line:
@@ -420,12 +436,13 @@ def find_member_offset(lines, struct_name, member_name, debug=False):
             if field_list_id:
                 break
 
-    # Also check for LF_UNION
+    # Also check for LF_UNION or LF_UNION2
     if not field_list_id:
         for i, line in enumerate(lines):
-            if "LF_UNION" in line and f"`{struct_name}`" in line:
+            if ("LF_UNION " in line or "LF_UNION2 " in line) and f"`{struct_name}`" in line:
                 if debug:
-                    print(f"    [DEBUG] Found LF_UNION for '{struct_name}' at line {i}")
+                    lf_type = "LF_UNION2" if "LF_UNION2" in line else "LF_UNION"
+                    print(f"    [DEBUG] Found {lf_type} for '{struct_name}' at line {i}")
                 for j in range(i + 1, min(i + 10, len(lines))):
                     next_line = lines[j]
                     if "forward ref" in next_line:
@@ -442,12 +459,13 @@ def find_member_offset(lines, struct_name, member_name, debug=False):
                 if field_list_id:
                     break
 
-    # Try LF_CLASS as fallback
+    # Try LF_CLASS or LF_CLASS2 as fallback
     if not field_list_id:
         for i, line in enumerate(lines):
-            if "LF_CLASS" in line and f"`{struct_name}`" in line:
+            if ("LF_CLASS " in line or "LF_CLASS2 " in line) and f"`{struct_name}`" in line:
                 if debug:
-                    print(f"    [DEBUG] Found LF_CLASS for '{struct_name}' at line {i}")
+                    lf_type = "LF_CLASS2" if "LF_CLASS2" in line else "LF_CLASS"
+                    print(f"    [DEBUG] Found {lf_type} for '{struct_name}' at line {i}")
                 for j in range(i + 1, min(i + 10, len(lines))):
                     next_line = lines[j]
                     if "forward ref" in next_line:
@@ -523,7 +541,7 @@ def find_member_type(lines, struct_name, member_name, debug=False):
     field_list_id = None
 
     for i, line in enumerate(lines):
-        if "LF_STRUCTURE" in line and f"`{struct_name}`" in line:
+        if ("LF_STRUCTURE " in line or "LF_STRUCTURE2 " in line) and f"`{struct_name}`" in line:
             for j in range(i + 1, min(i + 10, len(lines))):
                 next_line = lines[j]
                 if "forward ref" in next_line:
@@ -606,25 +624,29 @@ def find_member_offset_by_type_id(lines, type_id, member_name, debug=False):
     # Find the type definition and get its field list ID
     field_list_id = None
 
+    # Match LF_STRUCTURE, LF_STRUCTURE2, LF_UNION, LF_UNION2
     for i, line in enumerate(lines):
-        if f"{type_id} | LF_" in line and ("LF_STRUCTURE" in line or "LF_UNION" in line):
-            if debug:
-                print(f"    [DEBUG] Found type {type_id} at line {i}: {line.strip()[:80]}")
-            for j in range(i + 1, min(i + 10, len(lines))):
-                next_line = lines[j]
-                if "forward ref" in next_line:
-                    if debug:
-                        print(f"    [DEBUG] Skipping forward reference for {type_id}")
-                    break
-                field_list_match = re.search(r'field list:\s*(0x[0-9a-fA-F]+)', next_line)
-                if field_list_match:
-                    field_list_id = field_list_match.group(1)
-                    if debug:
-                        print(f"    [DEBUG] Type {type_id} has field list ID: {field_list_id}")
-                    break
+        if f"{type_id} | LF_" in line:
+            is_struct_or_union = ("LF_STRUCTURE " in line or "LF_STRUCTURE2 " in line or
+                                  "LF_UNION " in line or "LF_UNION2 " in line)
+            if is_struct_or_union:
+                if debug:
+                    print(f"    [DEBUG] Found type {type_id} at line {i}: {line.strip()[:80]}")
+                for j in range(i + 1, min(i + 10, len(lines))):
+                    next_line = lines[j]
+                    if "forward ref" in next_line:
+                        if debug:
+                            print(f"    [DEBUG] Skipping forward reference for {type_id}")
+                        break
+                    field_list_match = re.search(r'field list:\s*(0x[0-9a-fA-F]+)', next_line)
+                    if field_list_match:
+                        field_list_id = field_list_match.group(1)
+                        if debug:
+                            print(f"    [DEBUG] Type {type_id} has field list ID: {field_list_id}")
+                        break
 
-            if field_list_id:
-                break
+                if field_list_id:
+                    break
 
     if not field_list_id:
         if debug:
@@ -661,12 +683,13 @@ def find_member_offset_by_type_id(lines, type_id, member_name, debug=False):
     return None
 
 
-def run_llvm_pdbutil_publics(pdb_path):
+def run_llvm_pdbutil_publics(pdb_path, pdbutil_path=None):
     """
     Run llvm-pdbutil to dump public symbols (for global variables and functions).
 
     Args:
         pdb_path: Path to the PDB file
+        pdbutil_path: Optional path to llvm-pdbutil executable
 
     Returns:
         Output string, or None on failure
@@ -674,9 +697,12 @@ def run_llvm_pdbutil_publics(pdb_path):
     if not os.path.exists(pdb_path):
         return None
 
+    # Use custom path or search in PATH
+    pdbutil_cmd = pdbutil_path if pdbutil_path else "llvm-pdbutil"
+
     try:
         result = subprocess.run(
-            ["llvm-pdbutil", "dump", "-publics", pdb_path],
+            [pdbutil_cmd, "dump", "-publics", pdb_path],
             capture_output=True,
             text=True,
             timeout=300  # 5 minute timeout
@@ -689,8 +715,12 @@ def run_llvm_pdbutil_publics(pdb_path):
         return result.stdout
 
     except FileNotFoundError:
-        print("Error: llvm-pdbutil not found in PATH")
-        print("Please install LLVM tools and ensure llvm-pdbutil is in your PATH")
+        if pdbutil_path:
+            print(f"Error: llvm-pdbutil not found at: {pdbutil_path}")
+        else:
+            print("Error: llvm-pdbutil not found in PATH")
+            print("Please install LLVM tools and ensure llvm-pdbutil is in your PATH")
+            print("Or use -pdbutil to specify the path explicitly")
         sys.exit(1)
     except subprocess.TimeoutExpired:
         print(f"  Timeout while parsing PDB (publics): {pdb_path}")
@@ -760,7 +790,7 @@ def parse_public_symbol_offset(output, symbol_name, symbol_type, debug=False):
     return None
 
 
-def parse_pdb_all_symbols(pdb_path, symbols_list, debug=False):
+def parse_pdb_all_symbols(pdb_path, symbols_list, pdbutil_path=None, debug=False):
     """
     Parse PDB file to get offsets for all symbols.
 
@@ -773,6 +803,7 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, debug=False):
         pdb_path: Path to the PDB file
         symbols_list: List of symbol dicts with "name" and one of
                       struct_offset/var_offset/fn_offset keys
+        pdbutil_path: Optional path to llvm-pdbutil executable
         debug: Enable debug logging
 
     Returns:
@@ -786,12 +817,12 @@ def parse_pdb_all_symbols(pdb_path, symbols_list, debug=False):
     publics_output = None
 
     if need_types:
-        types_output = run_llvm_pdbutil(pdb_path)
+        types_output = run_llvm_pdbutil(pdb_path, pdbutil_path)
         if types_output is None:
             return None
 
     if need_publics:
-        publics_output = run_llvm_pdbutil_publics(pdb_path)
+        publics_output = run_llvm_pdbutil_publics(pdb_path, pdbutil_path)
         if publics_output is None:
             return None
 
@@ -998,6 +1029,7 @@ def main():
     json_path = args.json
     debug = args.debug
     sha256_filter = args.sha256
+    pdbutil_path = args.pdbutil
 
     # Validate paths
     if not os.path.exists(xml_path):
@@ -1008,6 +1040,10 @@ def main():
         print(f"Error: Symbol directory not found: {symboldir}")
         sys.exit(1)
 
+    if pdbutil_path and not os.path.exists(pdbutil_path):
+        print(f"Error: llvm-pdbutil not found at: {pdbutil_path}")
+        sys.exit(1)
+
     # Load JSON config
     print(f"Loading JSON config: {json_path}")
     file_list, symbols_list = load_json_config(json_path)
@@ -1016,6 +1052,9 @@ def main():
 
     if sha256_filter:
         print(f"  SHA256 filter: {sha256_filter}")
+
+    if pdbutil_path:
+        print(f"  Using llvm-pdbutil: {pdbutil_path}")
 
     if debug:
         print(f"  Debug mode: enabled")
@@ -1068,7 +1107,7 @@ def main():
                 continue
 
             print(f"  Parsing PDB: {pdb_path}")
-            offsets = parse_pdb_all_symbols(pdb_path, symbols_list, debug)
+            offsets = parse_pdb_all_symbols(pdb_path, symbols_list, pdbutil_path, debug)
 
             if offsets is None:
                 print(f"  Failed to extract all symbols")
