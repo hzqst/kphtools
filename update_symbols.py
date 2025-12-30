@@ -20,6 +20,10 @@ Usage:
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -yaml kphdyn.yaml -fixnull
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -yaml kphdyn.yaml -fixnull -debug
 
+    # Fixstruct mode: Fix struct_offset fallback values from closest valid version
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -yaml kphdyn.yaml -fixstruct
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -yaml kphdyn.yaml -fixstruct -debug
+
 YAML Config Format:
     - file:
         - ntoskrnl.exe
@@ -52,6 +56,7 @@ Optional Arguments:
     -syncfile: Sync PE files from symbol directory to XML (add missing entries)
     -fast: Fast mode for syncfile - only parse PE when entry is missing
     -fixnull: Only process entries with fields ID = 0, using SymbolMapping.yaml
+    -fixstruct: Fix struct_offset fallback values by copying from closest valid version
 
 Syncfile Mode:
     Scans the symbol directory for PE files (exe/dll/sys) and adds missing
@@ -78,7 +83,21 @@ Fixnull Mode:
     The offset is calculated as: symbol_address - ImageBase
     For example: 0x140D0C080 - 0x140000000 = 0xD0C080
 
-    Note: struct_offset symbols still require PDB files.
+    Note: struct_offset symbols still require PDB files. If PDB is not found,
+    struct_offset values are set to fallback values (0xffff for uint16,
+    0xffffffff for uint32).
+
+Fixstruct Mode:
+    Fixes struct_offset fallback values (0xffff for uint16, 0xffffffff for uint32)
+    by copying from the closest valid version within the same architecture.
+
+    For each data entry with fallback struct_offset values:
+    - Finds the closest version (by version number distance) that has valid
+      struct_offset values
+    - Copies the struct_offset values from the source entry
+    - Creates a new fields section or reuses an existing matching one
+
+    This is useful after running -fixnull on entries without PDB files.
 
 Requirements:
     - llvm-pdbutil must be available in system PATH or specified via -pdbutil
@@ -169,6 +188,11 @@ def parse_args():
         "-fixnull",
         action="store_true",
         help="Only process data entries with fields ID = 0 (null entries), using SymbolMapping.yaml"
+    )
+    parser.add_argument(
+        "-fixstruct",
+        action="store_true",
+        help="Fix struct_offset fallback values by copying from closest valid version"
     )
 
     args = parser.parse_args()
@@ -1456,6 +1480,304 @@ def fixnull_main(args, root, file_list, symbols_list):
 
 
 # =============================================================================
+# Fixstruct Mode Functions
+# =============================================================================
+
+def is_fallback_value(value, sym_type):
+    """
+    Check if a value is the fallback/reserved value.
+
+    Args:
+        value: The offset value (int)
+        sym_type: Symbol type ("uint16" or "uint32")
+
+    Returns:
+        True if value is the fallback value
+    """
+    if sym_type == "uint16":
+        return value == 0xffff
+    else:  # uint32
+        return value == 0xffffffff
+
+
+def version_distance(v1_str, v2_str):
+    """
+    Calculate distance between two version strings.
+
+    Args:
+        v1_str: First version string (e.g., "10.0.19041.2545")
+        v2_str: Second version string
+
+    Returns:
+        Distance as a float (smaller = closer)
+    """
+    t1 = parse_version(v1_str)
+    t2 = parse_version(v2_str)
+    # Weight: major > minor > build > revision
+    return (abs(t1[0] - t2[0]) * 1e12 +
+            abs(t1[1] - t2[1]) * 1e8 +
+            abs(t1[2] - t2[2]) * 1e4 +
+            abs(t1[3] - t2[3]))
+
+
+def get_entries_needing_struct_fix(root, file_list, struct_symbols, existing_fields):
+    """
+    Get all data entries with fields ID > 0 that have fallback struct_offset values.
+
+    Args:
+        root: XML root element
+        file_list: List of file names to match
+        struct_symbols: List of struct_offset symbol dicts
+        existing_fields: Dict mapping fields ID to {name: offset}
+
+    Returns:
+        List of (data_elem, fields_id, fields_to_fix)
+        where fields_to_fix is a list of (field_name, sym_type) tuples
+    """
+    entries = []
+
+    for data_elem in root.findall("data"):
+        file_name = data_elem.get("file")
+        if file_name not in file_list:
+            continue
+
+        # Get fields ID
+        text = data_elem.text
+        if not text:
+            continue
+
+        try:
+            fields_id = int(text.strip())
+        except ValueError:
+            continue
+
+        # Skip null entries (fields ID = 0)
+        if fields_id == 0:
+            continue
+
+        # Get the fields dict for this entry
+        if fields_id not in existing_fields:
+            continue
+
+        field_dict = existing_fields[fields_id]
+
+        # Check which struct_offset fields have fallback values
+        fields_to_fix = []
+        for sym in struct_symbols:
+            name = sym["name"]
+            sym_type = sym["type"]
+
+            if name in field_dict:
+                value = field_dict[name]
+                if is_fallback_value(value, sym_type):
+                    fields_to_fix.append((name, sym_type))
+
+        if fields_to_fix:
+            entries.append((data_elem, fields_id, fields_to_fix))
+
+    return entries
+
+
+def find_closest_valid_entry(root, arch, file_list, target_version, struct_symbols, existing_fields):
+    """
+    Find the closest version entry that has valid (non-fallback) struct_offset values.
+
+    Args:
+        root: XML root element
+        arch: Architecture to match
+        file_list: List of file names to match
+        target_version: Target version string to find closest to
+        struct_symbols: List of struct_offset symbol dicts
+        existing_fields: Dict mapping fields ID to {name: offset}
+
+    Returns:
+        Tuple of (fields_id, fields_dict) or (None, None) if not found
+    """
+    candidates = []
+
+    for data_elem in root.findall("data"):
+        elem_arch = data_elem.get("arch")
+        elem_file = data_elem.get("file")
+        elem_version = data_elem.get("version")
+
+        # Must match arch and be in file_list
+        if elem_arch != arch or elem_file not in file_list:
+            continue
+
+        # Skip the target version itself
+        if elem_version == target_version:
+            continue
+
+        # Get fields ID
+        text = data_elem.text
+        if not text:
+            continue
+
+        try:
+            fields_id = int(text.strip())
+        except ValueError:
+            continue
+
+        # Skip null entries
+        if fields_id == 0:
+            continue
+
+        if fields_id not in existing_fields:
+            continue
+
+        field_dict = existing_fields[fields_id]
+
+        # Check if ALL struct_offset fields have valid (non-fallback) values
+        all_valid = True
+        for sym in struct_symbols:
+            name = sym["name"]
+            sym_type = sym["type"]
+
+            if name not in field_dict:
+                all_valid = False
+                break
+
+            value = field_dict[name]
+            if is_fallback_value(value, sym_type):
+                all_valid = False
+                break
+
+        if all_valid:
+            distance = version_distance(target_version, elem_version)
+            candidates.append((distance, elem_version, fields_id, field_dict))
+
+    if not candidates:
+        return None, None
+
+    # Sort by distance, pick the closest
+    candidates.sort(key=lambda x: x[0])
+    _, closest_version, fields_id, field_dict = candidates[0]
+
+    return fields_id, field_dict, closest_version
+
+
+def fixstruct_main(args, root, file_list, symbols_list):
+    """
+    Main function for -fixstruct mode.
+
+    Fixes struct_offset fallback values by copying from the closest valid version.
+
+    Args:
+        args: Parsed command line arguments
+        root: XML root element
+        file_list: List of file names to match
+        symbols_list: List of symbol dicts from YAML config
+
+    Returns:
+        Tuple of (success_count, skip_count, unchanged_count)
+    """
+    debug = args.debug
+
+    # Get struct_offset symbols only
+    struct_symbols = [s for s in symbols_list if "struct_offset" in s]
+
+    if not struct_symbols:
+        print("No struct_offset symbols found in YAML config")
+        return 0, 0, 0
+
+    print(f"  struct_offset symbols to check: {len(struct_symbols)}")
+
+    # Collect existing fields
+    existing_fields = collect_existing_fields(root)
+    print(f"  Found {len(existing_fields)} existing fields sections")
+
+    # Get entries that need fixing
+    entries_to_fix = get_entries_needing_struct_fix(root, file_list, struct_symbols, existing_fields)
+    print(f"  Found {len(entries_to_fix)} entries with fallback struct_offset values")
+
+    if not entries_to_fix:
+        print("No entries need fixing.")
+        return 0, 0, 0
+
+    success_count = 0
+    skip_count = 0
+    unchanged_count = 0
+
+    new_fields = {}  # new_fields_id -> offsets
+
+    for i, (data_entry, old_fields_id, fields_to_fix) in enumerate(entries_to_fix):
+        arch = data_entry.get("arch")
+        version = data_entry.get("version")
+        file_name = data_entry.get("file")
+
+        field_names_to_fix = [f[0] for f in fields_to_fix]
+        print(f"\n[{i+1}/{len(entries_to_fix)}] {file_name} {version} ({arch})")
+        print(f"  Fields to fix: {', '.join(field_names_to_fix)}")
+
+        # Find closest valid entry
+        result = find_closest_valid_entry(root, arch, file_list, version, struct_symbols, existing_fields)
+
+        if result[0] is None:
+            print(f"  No valid source entry found, skipping")
+            skip_count += 1
+            continue
+
+        source_fields_id, source_field_dict, source_version = result
+        print(f"  Found source: version {source_version} (fields id={source_fields_id})")
+
+        if debug:
+            for name, sym_type in fields_to_fix:
+                source_value = source_field_dict.get(name, 0)
+                width = 4 if sym_type == "uint16" else 8
+                print(f"    [DEBUG] {name}: 0x{source_value:0{width}x}")
+
+        # Build new offsets by merging current fields with source struct_offset values
+        current_field_dict = existing_fields[old_fields_id]
+        new_offsets = dict(current_field_dict)  # Copy current values
+
+        # Override struct_offset fields with source values
+        for sym in struct_symbols:
+            name = sym["name"]
+            if name in source_field_dict:
+                new_offsets[name] = source_field_dict[name]
+
+        # Check if anything actually changed
+        if new_offsets == current_field_dict:
+            print(f"  No changes needed")
+            unchanged_count += 1
+            continue
+
+        # Find matching fields ID
+        fields_id = find_matching_fields_id(existing_fields, new_offsets)
+
+        if fields_id is None:
+            # Check new fields
+            for new_id, new_off in new_fields.items():
+                if new_off == new_offsets:
+                    fields_id = new_id
+                    break
+
+        if fields_id is None:
+            # Allocate new ID
+            all_ids = set(existing_fields.keys()) | set(new_fields.keys())
+            fields_id = allocate_new_fields_id(all_ids)
+            new_fields[fields_id] = new_offsets
+            print(f"  Created new fields id={fields_id}")
+        else:
+            print(f"  Using existing fields id={fields_id}")
+
+        # Update data entry
+        data_entry.text = str(fields_id)
+        success_count += 1
+
+    # Add new fields elements to the XML
+    for fields_id, offsets in sorted(new_fields.items()):
+        create_fields_element(root, fields_id, offsets, symbols_list)
+
+    # Remove orphan fields
+    removed_count = remove_orphan_fields(root)
+    if removed_count > 0:
+        print(f"\nRemoved {removed_count} orphan fields sections")
+
+    return success_count, skip_count, unchanged_count
+
+
+# =============================================================================
 # Syncfile Mode Functions
 # =============================================================================
 
@@ -1892,6 +2214,34 @@ def main():
 
         if failed > 0:
             sys.exit(1)
+        return
+
+    # Handle fixstruct mode
+    if args.fixstruct:
+        print(f"Running in fixstruct mode")
+
+        yaml_path = args.yaml
+        debug = args.debug
+
+        if debug:
+            print(f"  Debug mode: enabled")
+
+        # Load YAML config
+        print(f"Loading YAML config: {yaml_path}")
+        file_list, symbols_list = load_yaml_config(yaml_path)
+        print(f"  Files to process: {file_list}")
+        print(f"  Symbols to extract: {len(symbols_list)}")
+
+        success, skipped, unchanged = fixstruct_main(args, root, file_list, symbols_list)
+
+        # Save XML
+        print(f"\nSaving XML to: {outxml_path}")
+        save_xml_with_header(root, outxml_path)
+
+        # Summary
+        print(f"\n{'='*50}")
+        print(f"Summary: {success} fixed, {skipped} skipped, {unchanged} unchanged")
+
         return
 
     # Normal mode: update symbols from PDB
