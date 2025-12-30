@@ -16,6 +16,10 @@ Usage:
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -syncfile -fast
     python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -syncfile -outxml kphdyn_updated.xml
 
+    # Fixnull mode: Fix null entries (fields ID = 0) using SymbolMapping.yaml
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -yaml kphdyn.yaml -fixnull
+    python update_symbols.py -xml kphdyn.xml -symboldir C:/Symbols -yaml kphdyn.yaml -fixnull -debug
+
 YAML Config Format:
     - file:
         - ntoskrnl.exe
@@ -47,6 +51,7 @@ Optional Arguments:
     -debug: Enable debug logging for symbol parsing
     -syncfile: Sync PE files from symbol directory to XML (add missing entries)
     -fast: Fast mode for syncfile - only parse PE when entry is missing
+    -fixnull: Only process entries with fields ID = 0, using SymbolMapping.yaml
 
 Syncfile Mode:
     Scans the symbol directory for PE files (exe/dll/sys) and adds missing
@@ -58,6 +63,22 @@ Syncfile Mode:
 
     The -fast flag skips PE parsing for entries that already exist,
     only parsing when a new entry needs to be added.
+
+Fixnull Mode:
+    Processes only data entries with fields ID = 0 (null entries).
+    Instead of parsing PDB files for var_offset and fn_offset symbols,
+    it reads from SymbolMapping.yaml in the symbol directory.
+
+    SymbolMapping.yaml format:
+        sub_140822108: PspSetCreateProcessNotifyRoutine
+        stru_140D0C080: PspCreateProcessNotifyRoutine
+        sub_1402CC450: ExReferenceCallBackBlock
+        '140000000': ImageBase
+
+    The offset is calculated as: symbol_address - ImageBase
+    For example: 0x140D0C080 - 0x140000000 = 0xD0C080
+
+    Note: struct_offset symbols still require PDB files.
 
 Requirements:
     - llvm-pdbutil must be available in system PATH or specified via -pdbutil
@@ -143,6 +164,11 @@ def parse_args():
         "-fast",
         action="store_true",
         help="Fast mode: only parse PE content when entry is missing"
+    )
+    parser.add_argument(
+        "-fixnull",
+        action="store_true",
+        help="Only process data entries with fields ID = 0 (null entries), using SymbolMapping.yaml"
     )
 
     args = parser.parse_args()
@@ -1104,6 +1130,332 @@ def remove_orphan_fields(root):
 
 
 # =============================================================================
+# Fixnull Mode Functions
+# =============================================================================
+
+def get_symbol_mapping_path(symboldir, arch, file_name, version):
+    """
+    Build the path to the SymbolMapping.yaml file.
+
+    Args:
+        symboldir: Base symbol directory
+        arch: Architecture (amd64, arm64, etc.)
+        file_name: File name (e.g., ntoskrnl.exe)
+        version: Windows version string
+
+    Returns:
+        Path to the SymbolMapping.yaml file
+    """
+    symbol_subdir = os.path.join(symboldir, arch, f"{file_name}.{version}")
+    mapping_path = os.path.join(symbol_subdir, "SymbolMapping.yaml")
+    return mapping_path
+
+
+def load_symbol_mapping(mapping_path):
+    """
+    Load SymbolMapping.yaml file and parse symbol addresses.
+
+    The file format is:
+        sub_140822108: PspSetCreateProcessNotifyRoutine
+        stru_140D0C080: PspCreateProcessNotifyRoutine
+        '140000000': ImageBase
+
+    Args:
+        mapping_path: Path to SymbolMapping.yaml file
+
+    Returns:
+        Dict mapping symbol name to address (int), or None on failure
+    """
+    if not HAS_YAML:
+        print("Error: PyYAML module is required for -fixnull mode")
+        print("Install it with: pip install pyyaml")
+        sys.exit(1)
+
+    if not os.path.exists(mapping_path):
+        return None
+
+    try:
+        with open(mapping_path, "r", encoding="utf-8") as f:
+            mapping = yaml.safe_load(f)
+
+        if not isinstance(mapping, dict):
+            print(f"  Warning: Invalid SymbolMapping.yaml format")
+            return None
+
+        # Build reverse mapping: symbol_name -> address
+        symbol_to_addr = {}
+        image_base = None
+
+        for key, value in mapping.items():
+            # Handle ImageBase
+            if value == "ImageBase":
+                # Key is the address (e.g., '140000000')
+                try:
+                    image_base = int(str(key), 16)
+                except ValueError:
+                    print(f"  Warning: Invalid ImageBase address: {key}")
+                    continue
+            else:
+                # Key is like "sub_140822108" or "stru_140D0C080"
+                # Extract address from key
+                key_str = str(key)
+                addr_match = re.search(r'_([0-9a-fA-F]+)$', key_str)
+                if addr_match:
+                    try:
+                        addr = int(addr_match.group(1), 16)
+                        symbol_to_addr[value] = addr
+                    except ValueError:
+                        pass
+
+        if image_base is None:
+            print(f"  Warning: ImageBase not found in SymbolMapping.yaml")
+            return None
+
+        # Calculate RVA (offset from ImageBase) for each symbol
+        result = {}
+        for name, addr in symbol_to_addr.items():
+            rva = addr - image_base
+            result[name] = rva
+
+        return result
+
+    except Exception as e:
+        print(f"  Warning: Failed to load SymbolMapping.yaml: {e}")
+        return None
+
+
+def parse_symbols_from_mapping(mapping, symbols_list, debug=False):
+    """
+    Extract symbol offsets from SymbolMapping.yaml data.
+
+    Only processes var_offset and fn_offset symbols.
+    struct_offset symbols are skipped (they need PDB parsing).
+
+    Args:
+        mapping: Dict mapping symbol name to RVA offset
+        symbols_list: List of symbol dicts from YAML config
+        debug: Enable debug logging
+
+    Returns:
+        Dict mapping symbol name to offset, or None if any required symbol is missing
+    """
+    offsets = {}
+
+    for sym in symbols_list:
+        name = sym["name"]
+        sym_type = sym["type"]
+        max_value = 0xffff if sym_type == "uint16" else 0xffffffff
+        offset = None
+
+        if "struct_offset" in sym:
+            # struct_offset symbols are handled separately via PDB
+            continue
+
+        elif "var_offset" in sym:
+            symbol_name = sym["var_offset"]
+            if symbol_name in mapping:
+                offset = mapping[symbol_name]
+                if debug:
+                    print(f"    [DEBUG] var_offset '{symbol_name}' = 0x{offset:08x}")
+            else:
+                if debug:
+                    print(f"    [DEBUG] var_offset '{symbol_name}' not found in mapping")
+                return None
+
+        elif "fn_offset" in sym:
+            symbol_name = sym["fn_offset"]
+            if symbol_name in mapping:
+                offset = mapping[symbol_name]
+                if debug:
+                    print(f"    [DEBUG] fn_offset '{symbol_name}' = 0x{offset:08x}")
+            else:
+                if debug:
+                    print(f"    [DEBUG] fn_offset '{symbol_name}' not found in mapping")
+                return None
+
+        if offset is not None:
+            if offset > max_value:
+                print(f"  Warning: offset 0x{offset:x} exceeds {sym_type} max (0x{max_value:x}), clamping")
+                offset = max_value
+            offsets[name] = offset
+
+    return offsets
+
+
+def get_null_entries_for_files(root, file_list):
+    """
+    Get all <data> elements with fields ID = 0 matching any file in file_list.
+
+    Args:
+        root: XML root element
+        file_list: List of file names to match
+
+    Returns:
+        List of matching data elements with fields ID = 0
+    """
+    entries = []
+    for data_elem in root.findall("data"):
+        file_name = data_elem.get("file")
+        if file_name in file_list:
+            # Check if fields ID is 0
+            text = data_elem.text
+            if text and text.strip() == "0":
+                entries.append(data_elem)
+    return entries
+
+
+def fixnull_main(args, root, file_list, symbols_list):
+    """
+    Main function for -fixnull mode.
+
+    Args:
+        args: Parsed command line arguments
+        root: XML root element
+        file_list: List of file names to match
+        symbols_list: List of symbol dicts from YAML config
+
+    Returns:
+        Tuple of (success_count, skip_count, fail_count)
+    """
+    symboldir = args.symboldir
+    debug = args.debug
+    pdbutil_path = args.pdbutil
+
+    # Check if we have symbols that require SymbolMapping.yaml
+    # (var_offset or fn_offset)
+    mapping_symbols = [s for s in symbols_list if "var_offset" in s or "fn_offset" in s]
+    struct_symbols = [s for s in symbols_list if "struct_offset" in s]
+
+    if not mapping_symbols:
+        print("Error: -fixnull requires symbols with var_offset or fn_offset")
+        sys.exit(1)
+
+    # Get null entries
+    null_entries = get_null_entries_for_files(root, file_list)
+    print(f"  Found {len(null_entries)} null entries (fields ID = 0)")
+
+    if not null_entries:
+        print("No null entries found.")
+        return 0, 0, 0
+
+    # Collect existing fields
+    existing_fields = collect_existing_fields(root)
+
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+
+    referenced_ids = set()
+    new_fields = {}
+    mapping_cache = {}
+
+    for i, data_entry in enumerate(null_entries):
+        arch = data_entry.get("arch")
+        version = data_entry.get("version")
+        file_name = data_entry.get("file")
+
+        print(f"\n[{i+1}/{len(null_entries)}] Processing {file_name} {version} ({arch})")
+
+        cache_key = (arch, version)
+        offsets = None
+
+        # Try to get offsets from cache first
+        if cache_key in mapping_cache:
+            offsets = mapping_cache[cache_key]
+            print(f"  Using cached offsets")
+        else:
+            # Load SymbolMapping.yaml
+            mapping_path = get_symbol_mapping_path(symboldir, arch, file_name, version)
+
+            if not os.path.exists(mapping_path):
+                print(f"  SymbolMapping.yaml not found: {mapping_path}")
+                skip_count += 1
+                continue
+
+            print(f"  Loading SymbolMapping.yaml")
+            mapping = load_symbol_mapping(mapping_path)
+
+            if mapping is None:
+                print(f"  Failed to load SymbolMapping.yaml")
+                skip_count += 1
+                continue
+
+            if debug:
+                print(f"    [DEBUG] Loaded {len(mapping)} symbols from mapping")
+
+            # Get offsets for var_offset and fn_offset symbols
+            mapping_offsets = parse_symbols_from_mapping(mapping, mapping_symbols, debug)
+
+            if mapping_offsets is None:
+                print(f"  Failed to get all mapping symbols")
+                skip_count += 1
+                continue
+
+            # If there are struct_offset symbols, try PDB or fallback to max values
+            if struct_symbols:
+                pdb_path = get_pdb_path(symboldir, arch, version)
+                struct_offsets = None
+
+                if os.path.exists(pdb_path):
+                    print(f"  Parsing PDB for struct symbols")
+                    struct_offsets = parse_pdb_all_symbols(pdb_path, struct_symbols, pdbutil_path, debug)
+
+                    if struct_offsets is None:
+                        print(f"  Failed to extract struct symbols from PDB, using fallback values")
+                else:
+                    print(f"  PDB not found: {pdb_path}, using fallback values for struct symbols")
+
+                # If PDB parsing failed or PDB not found, use fallback values
+                if struct_offsets is None:
+                    struct_offsets = {}
+                    for sym in struct_symbols:
+                        name = sym["name"]
+                        sym_type = sym["type"]
+                        max_value = 0xffff if sym_type == "uint16" else 0xffffffff
+                        struct_offsets[name] = max_value
+                        if debug:
+                            width = 4 if sym_type == "uint16" else 8
+                            print(f"    [DEBUG] struct_offset '{name}' fallback = 0x{max_value:0{width}x}")
+
+                # Merge offsets
+                offsets = {**struct_offsets, **mapping_offsets}
+            else:
+                offsets = mapping_offsets
+
+            mapping_cache[cache_key] = offsets
+
+        # Find matching fields ID
+        fields_id = find_matching_fields_id(existing_fields, offsets)
+
+        if fields_id is None:
+            # Check new fields
+            for new_id, new_offsets in new_fields.items():
+                if new_offsets == offsets:
+                    fields_id = new_id
+                    break
+
+        if fields_id is None:
+            # Allocate new ID
+            all_ids = set(existing_fields.keys()) | set(new_fields.keys())
+            fields_id = allocate_new_fields_id(all_ids)
+            new_fields[fields_id] = offsets
+            print(f"  Created new fields id={fields_id}")
+        else:
+            print(f"  Using existing fields id={fields_id}")
+
+        # Update data entry
+        data_entry.text = str(fields_id)
+        referenced_ids.add(fields_id)
+        success_count += 1
+
+    # Add new fields elements to the XML
+    for fields_id, offsets in sorted(new_fields.items()):
+        create_fields_element(root, fields_id, offsets, symbols_list)
+
+    return success_count, skip_count, fail_count
+
+
+# =============================================================================
 # Syncfile Mode Functions
 # =============================================================================
 
@@ -1507,6 +1859,36 @@ def main():
         # Summary
         print(f"\n{'='*50}")
         print(f"Summary: {added} added, {skipped} skipped, {failed} failed")
+
+        if failed > 0:
+            sys.exit(1)
+        return
+
+    # Handle fixnull mode
+    if args.fixnull:
+        print(f"Running in fixnull mode")
+
+        yaml_path = args.yaml
+        debug = args.debug
+
+        if debug:
+            print(f"  Debug mode: enabled")
+
+        # Load YAML config
+        print(f"Loading YAML config: {yaml_path}")
+        file_list, symbols_list = load_yaml_config(yaml_path)
+        print(f"  Files to process: {file_list}")
+        print(f"  Symbols to extract: {len(symbols_list)}")
+
+        success, skipped, failed = fixnull_main(args, root, file_list, symbols_list)
+
+        # Save XML
+        print(f"\nSaving XML to: {outxml_path}")
+        save_xml_with_header(root, outxml_path)
+
+        # Summary
+        print(f"\n{'='*50}")
+        print(f"Summary: {success} fixed, {skipped} skipped, {failed} failed")
 
         if failed > 0:
             sys.exit(1)

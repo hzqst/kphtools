@@ -171,9 +171,22 @@ def rename_function(ea, new_name):
         return False
 
 
+def get_image_base():
+    """
+    获取当前加载的 PE 文件的 ImageBase
+
+    Returns:
+        ImageBase 地址
+    """
+    # 使用 ida_nalt 获取 ImageBase
+    import ida_nalt
+    return ida_nalt.get_imagebase()
+
+
 def apply_symbol_remap(mapping_path):
     """
     应用符号映射，将所有 unmapped 名称重命名为真实名称
+    同时在 YAML 文件中添加 ImageBase 信息
 
     Args:
         mapping_path: SymbolMapping.yaml 文件路径
@@ -188,6 +201,26 @@ def apply_symbol_remap(mapping_path):
         return 0, 0, 0
 
     print(f"[*] Loaded {len(mappings)} symbol mappings from: {mapping_path}")
+
+    # 获取 ImageBase 并检查是否需要添加
+    image_base = get_image_base()
+    image_base_key = f"{image_base:X}"  # 转换为十六进制字符串，如 "140000000"
+
+    # 检查是否已存在 ImageBase 条目
+    if image_base_key not in mappings:
+        # 添加 ImageBase 条目到映射中
+        mappings[image_base_key] = "ImageBase"
+        print(f"[*] Adding ImageBase entry: {image_base_key}: ImageBase")
+
+        # 更新 YAML 文件
+        try:
+            with open(mapping_path, "w", encoding="utf-8") as f:
+                yaml.dump(mappings, f, default_flow_style=False, allow_unicode=True, sort_keys=False)
+            print(f"[+] Updated {mapping_path} with ImageBase")
+        except Exception as e:
+            print(f"[!] Failed to update YAML file with ImageBase: {e}")
+    else:
+        print(f"[*] ImageBase entry already exists: {image_base_key}")
 
     success_count = 0
     fail_count = 0
