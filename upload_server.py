@@ -5,26 +5,28 @@ File Upload Server for KPH Dynamic Data
 HTTP server that handles file uploads, validates PE files and digital signatures,
 and stores files in the symbol directory structure.
 
-Supports two upload formats:
-    1. multipart/form-data: Traditional form-based file upload
-    2. application/octet-stream: Raw binary file upload
+Upload format:
+    application/octet-stream: Raw binary file upload
 
 Optional features:
     - X-File-Compressed: gzip header to indicate gzip-compressed file
 
 Usage:
     python upload_server.py -symboldir=C:/Symbols [-port=8000]
-    
+
     Or:
     python upload_server.py -symboldir C:/Symbols -port 8000
+
+    Upload example:
+    curl -X POST -H "Content-Type: application/octet-stream" --data-binary "@ntoskrnl.exe" http://localhost:8000/upload
 
 Requirements:
     Python packages:
         pip install pefile signify
-    
+
     System dependencies (Ubuntu/Debian):
         sudo apt-get install -y libssl-dev
-    
+
     System dependencies (CentOS/RHEL/Fedora):
         sudo yum install -y openssl-devel
         # or on newer versions:
@@ -40,7 +42,6 @@ import socketserver
 import json
 from io import BytesIO
 from urllib.parse import urlparse, parse_qs
-import re
 import gzip
 
 try:
@@ -186,14 +187,19 @@ def verify_pe_file(file_data):
 def verify_signature(file_data):
     """
     Verify Authenticode digital signature.
-    
+
     Args:
         file_data: Bytes data of the PE file
-        
+
     Returns:
         True if signature is valid and matches requirements, False otherwise
     """
     try:
+        # Debug: print file size and hash
+        import hashlib
+        print(f'[DEBUG] File size: {len(file_data)} bytes')
+        print(f'[DEBUG] File SHA256: {hashlib.sha256(file_data).hexdigest()}')
+
         # Create SignedPEFile from bytes
         file_io = BytesIO(file_data)
         signed_pe = SignedPEFile(file_io)
@@ -201,7 +207,8 @@ def verify_signature(file_data):
         # Verify the signature - this will raise VerificationError if invalid
         try:
             signed_pe.verify()
-        except VerificationError:
+        except VerificationError as e:
+            print(f'VerificationError: {e}')
             return False
         
         # Check signer and issuer from embedded signatures
@@ -293,88 +300,6 @@ def verify_signature(file_data):
     except Exception as e:
         # Don't print error in production, just return False
         return False
-
-
-def parse_multipart_form_data(rfile, content_type, content_length):
-    """
-    Parse multipart/form-data without using deprecated cgi module.
-    
-    Args:
-        rfile: File-like object to read from
-        content_type: Content-Type header value
-        content_length: Content-Length header value
-        
-    Returns:
-        Dictionary mapping field names to file objects with filename and file attributes
-    """
-    # Extract boundary from Content-Type
-    boundary_match = re.search(r'boundary=([^;]+)', content_type)
-    if not boundary_match:
-        raise ValueError("No boundary found in Content-Type")
-    
-    boundary = boundary_match.group(1).strip('"')
-    boundary_bytes = boundary.encode('ascii')
-    delimiter = b'--' + boundary_bytes
-    end_delimiter = delimiter + b'--'
-    
-    # Read all data
-    data = rfile.read(content_length)
-    
-    # Remove trailing boundary end marker if present
-    if data.endswith(end_delimiter):
-        data = data[:-len(end_delimiter)]
-    elif data.endswith(end_delimiter + b'\r\n'):
-        data = data[:-len(end_delimiter) - 2]
-    elif data.endswith(end_delimiter + b'\n'):
-        data = data[:-len(end_delimiter) - 1]
-    
-    # Split by delimiter
-    parts = data.split(delimiter)
-    
-    form_data = {}
-    
-    for part in parts:
-        # Remove leading/trailing whitespace and newlines
-        part = part.strip(b'\r\n')
-        if not part:
-            continue
-        
-        # Split headers and body
-        if b'\r\n\r\n' in part:
-            headers_raw, body = part.split(b'\r\n\r\n', 1)
-        elif b'\n\n' in part:
-            headers_raw, body = part.split(b'\n\n', 1)
-        else:
-            continue
-        
-        # Parse headers
-        headers = {}
-        for line in headers_raw.split(b'\n'):
-            line = line.strip()
-            if b':' in line:
-                key, value = line.split(b':', 1)
-                headers[key.strip().lower()] = value.strip()
-        
-        # Extract Content-Disposition
-        content_disposition = headers.get(b'content-disposition', b'').decode('utf-8', errors='ignore')
-        
-        # Extract field name and filename
-        name_match = re.search(r'name="([^"]+)"', content_disposition)
-        filename_match = re.search(r'filename="([^"]+)"', content_disposition)
-        
-        if name_match:
-            field_name = name_match.group(1)
-            filename = filename_match.group(1) if filename_match else None
-            
-            # Create a file-like object
-            class FileItem:
-                def __init__(self, data, filename):
-                    self.filename = filename
-                    self.file = BytesIO(data)
-            
-            form_data[field_name] = FileItem(body.rstrip(b'\r\n'), filename)
-    
-    return form_data
 
 
 def save_file(file_data, file_name, file_version, arch, symboldir):
@@ -588,46 +513,19 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
         
         # Check Content-Type and handle accordingly
         content_type = self.headers.get('Content-Type', '').lower()
-        file_data = None
-        
-        if content_type.startswith('multipart/form-data'):
-            # Handle multipart/form-data format
-            try:
-                form = parse_multipart_form_data(self.rfile, content_type, content_length)
-            except Exception as e:
-                self.send_json_response(400, f"Failed to parse form data: {e}")
-                return
-            
-            # Get uploaded file
-            if 'file' not in form:
-                self.send_json_response(400, "No file in request")
-                return
-            
-            file_item = form['file']
-            if not file_item.filename:
-                self.send_json_response(400, "No filename provided")
-                return
-            
-            # Read file data
-            try:
-                file_data = file_item.file.read()
-            except Exception as e:
-                self.send_json_response(400, f"Failed to read file data: {e}")
-                return
-        
-        elif content_type.startswith('application/octet-stream') or content_type == '':
-            # Handle application/octet-stream format (or missing Content-Type)
-            # Read file data directly from request body
-            try:
-                file_data = self.rfile.read(content_length)
-            except Exception as e:
-                self.send_json_response(400, f"Failed to read file data: {e}")
-                return
-        
-        else:
-            self.send_json_response(400, "Content-Type must be multipart/form-data or application/octet-stream")
+
+        # Only accept application/octet-stream or empty Content-Type
+        if not (content_type.startswith('application/octet-stream') or content_type == ''):
+            self.send_json_response(400, "Content-Type must be application/octet-stream")
             return
-        
+
+        # Read file data directly from request body
+        try:
+            file_data = self.rfile.read(content_length)
+        except Exception as e:
+            self.send_json_response(400, f"Failed to read file data: {e}")
+            return
+
         # Verify file size does not exceed maximum allowed size (compressed size)
         if len(file_data) > MAX_FILE_SIZE:
             self.send_json_response(413, f"File too large (max {MAX_FILE_SIZE / (1024 * 1024)}MB)")

@@ -299,18 +299,19 @@ Not found:
 ### API: Upload your ntoskrnl to localhost server:
 
 ```
-curl -X POST -F "file=@C:/Windows/System32/ntoskrnl.exe" http://localhost:8000/upload
+curl -X POST -H "Content-Type: application/octet-stream" --data-binary "@C:/Windows/System32/ntoskrnl.exe" http://localhost:8000/upload
 ```
 
 * File size limit: 20MB
 * If the target file already exists, it will not be overwritten
-* Both "multipart/form-data" and "application/octet-stream" are supported
+* "application/octet-stream" is expected
 * Header "X-File-Compressed: gzip" supported, client should gzip the ntoskrnl payload before uploading.
 
 ### API: Healthy Check
 
 ```
 curl "http://localhost:8000/health"
+curl "http://localhost:8000/"
 ```
 
 ```
