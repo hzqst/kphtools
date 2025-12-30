@@ -490,6 +490,10 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
             self.send_json_response(200, "OK", {'status': 'healthy'})
             return
         
+        if path == '/':
+            self.send_json_response(200, "OK", {'status': 'healthy'})
+            return
+        
         # Handle file existence check endpoint
         if path != '/exists':
             self.send_json_response(404, "Not Found")
@@ -710,8 +714,8 @@ def main():
         with socketserver.TCPServer(("", port), handler_factory) as httpd:
             print(f"Server started. Press Ctrl+C to stop.")
             httpd.serve_forever()
-    # except KeyboardInterrupt:
-    #    print("\nServer stopped.")
+    except KeyboardInterrupt:
+        print("\nServer stopped.")
     except OSError as e:
         print(f"Error: Failed to start server: {e}")
         sys.exit(1)
