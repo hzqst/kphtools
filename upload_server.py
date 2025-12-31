@@ -40,6 +40,7 @@ import hashlib
 import http.server
 import socketserver
 import json
+import re
 from io import BytesIO
 from urllib.parse import urlparse, parse_qs
 import gzip
@@ -74,6 +75,96 @@ MAX_FILE_SIZE = 20 * 1024 * 1024  # 20MB
 UPLOAD_DIR = 'uploads'
 ALLOW_FILENAME = ['ntoskrnl.exe', 'ntkrnlmp.exe', 'ntkrla57.exe']
 ALLOW_FILEDESC = ['NT Kernel & System']
+ALLOW_ARCH = ['x86', 'amd64', 'arm64']
+
+# Regex pattern for file version: X.X.X.X where X is a ushort (0-65535)
+FILEVERSION_PATTERN = re.compile(
+    r'^(?:0|[1-9]\d{0,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])\.'
+    r'(?:0|[1-9]\d{0,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])\.'
+    r'(?:0|[1-9]\d{0,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])\.'
+    r'(?:0|[1-9]\d{0,4}|[1-5]\d{4}|6[0-4]\d{3}|65[0-4]\d{2}|655[0-2]\d|6553[0-5])$'
+)
+
+
+def validate_exists_params(arch, filename, fileversion):
+    """
+    Validate parameters for /exists endpoint.
+
+    Args:
+        arch: Architecture string
+        filename: Filename string
+        fileversion: File version string
+
+    Returns:
+        Tuple of (is_valid: bool, error_message: str or None)
+    """
+    # Validate arch
+    if arch not in ALLOW_ARCH:
+        return (False, f"Invalid arch: must be one of {ALLOW_ARCH}")
+
+    # Validate filename (case-insensitive)
+    if filename.lower() not in [name.lower() for name in ALLOW_FILENAME]:
+        return (False, f"Invalid filename: must be one of {ALLOW_FILENAME}")
+
+    # Validate fileversion format: X.X.X.X where X is ushort (0-65535)
+    if not FILEVERSION_PATTERN.match(fileversion):
+        return (False, "Invalid fileversion: must be in format X.X.X.X where X is 0-65535")
+
+    return (True, None)
+
+
+def check_file_exists(symboldir, arch, filename, fileversion):
+    """
+    Check if a file exists in the symbol directory.
+
+    Args:
+        symboldir: Base symbol directory path
+        arch: Architecture (x86/amd64/arm64)
+        filename: Filename to check
+        fileversion: File version string
+
+    Returns:
+        Dictionary with file existence information:
+        {
+            'filename': str,
+            'arch': str,
+            'fileversion': str,
+            'exists': bool,
+            'path': str,
+            'file_size': int (optional, only if file exists)
+        }
+    """
+    # Build file path: {symboldir}/{arch}/{filename}.{fileversion}/{filename}
+    target_dir = os.path.join(symboldir, arch, f"{filename}.{fileversion}")
+    target_path = os.path.join(target_dir, filename)
+
+    # Build relative path (relative to symboldir) for response
+    # Format: {arch}/{filename}.{fileversion}/{filename}
+    relative_path = os.path.join(arch, f"{filename}.{fileversion}", filename)
+    # Normalize path separators to forward slashes for consistency
+    relative_path = relative_path.replace(os.sep, '/')
+
+    # Check if file exists
+    file_exists = os.path.exists(target_path) and os.path.isfile(target_path)
+
+    # Prepare response data
+    result = {
+        'filename': filename,
+        'arch': arch,
+        'fileversion': fileversion,
+        'exists': file_exists,
+        'path': relative_path
+    }
+
+    if file_exists:
+        # Get file size
+        try:
+            file_size = os.path.getsize(target_path)
+            result['file_size'] = file_size
+        except OSError:
+            pass
+
+    return result
 
 
 def parse_args():
@@ -413,64 +504,43 @@ class UploadHandler(http.server.BaseHTTPRequestHandler):
         """Handle GET requests to /health and /exists."""
         parsed_url = urlparse(self.path)
         path = parsed_url.path
-        
+
         # Handle health check endpoint
         if path == '/health':
             self.send_json_response(200, "OK", {'status': 'healthy'})
             return
-        
+
         if path == '/':
             self.send_json_response(200, "OK", {'status': 'healthy'})
             return
-        
+
         # Handle file existence check endpoint
         if path != '/exists':
             self.send_json_response(404, "Not Found")
             return
-        
+
         # Parse query parameters
         query_params = parse_qs(parsed_url.query)
-        
+
         # Get required parameters
         filename = query_params.get('filename', [None])[0]
         arch = query_params.get('arch', [None])[0]
         fileversion = query_params.get('fileversion', [None])[0]
-        
+
         # Validate required parameters
         if not filename or not arch or not fileversion:
             self.send_json_response(400, "Missing required parameters: filename, arch, and fileversion are required")
             return
-        
-        # Build file path: {symboldir}/{arch}/{filename}.{fileversion}/{filename}
-        target_dir = os.path.join(self.symboldir, arch, f"{filename}.{fileversion}")
-        target_path = os.path.join(target_dir, filename)
-        
-        # Build relative path (relative to symboldir) for response
-        # Format: {arch}/{filename}.{fileversion}/{filename}
-        relative_path = os.path.join(arch, f"{filename}.{fileversion}", filename)
-        # Normalize path separators to forward slashes for consistency
-        relative_path = relative_path.replace(os.sep, '/')
-        
-        # Check if file exists
-        file_exists = os.path.exists(target_path) and os.path.isfile(target_path)
-        
-        # Prepare response data
-        response_data = {
-            'filename': filename,
-            'arch': arch,
-            'fileversion': fileversion,
-            'exists': file_exists,
-            'path': relative_path
-        }
-        
-        if file_exists:
-            # Get file size
-            try:
-                file_size = os.path.getsize(target_path)
-                response_data['file_size'] = file_size
-            except OSError:
-                pass
-        
+
+        # Validate parameter values
+        is_valid, error_message = validate_exists_params(arch, filename, fileversion)
+        if not is_valid:
+            self.send_json_response(400, error_message)
+            return
+
+        # Check file existence
+        response_data = check_file_exists(self.symboldir, arch, filename, fileversion)
+
         self.send_json_response(200, "File existence checked", response_data)
 
     def do_HEAD(self):
