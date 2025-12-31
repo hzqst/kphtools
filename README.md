@@ -398,9 +398,9 @@ For each PE file missing PDB:
 - IDA Pro with `ida64.exe`
 - Python packages: `pyyaml`, `openai` or `anthropic`
 
-## Reference workflow in jenkins (Windows)
+## Reference workflow in Jenkins (Windows)
 
-```bash
+```shell
 @echo Get latest kphdyn.xml
 
 powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/winsiderss/systeminformer/master/kphlib/kphdyn.xml' -OutFile kphdyn.official.xml"
@@ -408,14 +408,14 @@ powershell -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/w
 copy kphdyn.official.xml kphdyn.xml /y
 ```
 
-```bash
+```shell
 @echo Sync unmanaged ntoskrnl to kphdyn.xml
 
 python update_symbols.py -xml="%WORKSPACE%\kphdyn.xml" -symboldir="%WORKSPACE%\symbols" -syncfile -fast
 ```
 
-```bash
-@echo Download ntoskrnl via kphdyn.xml
+```shell
+@echo Download ntoskrnl via kphdyn.xml, this may takes hours for the first run
 
 pip install -r requirements.txt
 
@@ -424,7 +424,7 @@ python download_symbols.py -xml="%WORKSPACE%\kphdyn.xml" -symboldir="%WORKSPACE%
 exit 0
 ```
 
-```bash
+```shell
 @echo Generate SymbolMapping.yaml for missing-pdb ntoskrnl
 
 python reverse_symbols.py -symboldir="%WORKSPACE%\symbols" -reverse=PsSetCreateProcessNotifyRoutine -provider=openai -api_key="sk-****" -model="deepseek-chat" -api_base="https://api.deepseek.com"
@@ -432,19 +432,19 @@ python reverse_symbols.py -symboldir="%WORKSPACE%\symbols" -reverse=PsSetCreateP
 python reverse_symbols.py -symboldir="%WORKSPACE%\symbols"  -reverse=PspSetCreateProcessNotifyRoutine -provider=openai -api_key="sk-****" -model="deepseek-chat" -api_base="https://api.deepseek.com"
 ```
 
-```bash
+```shell
 @echo Generate strut function and variable RVA via ntoskrnl pdb
 
 python update_symbols.py -xml kphdyn.xml -symboldir "%WORKSPACE%\symbols" -yaml kphdyn.yaml
 ```
 
-```bash
+```shell
 @echo Fix function and variable RVA via SymbolMapping.yaml
 
 python update_symbols.py -xml kphdyn.xml -symboldir "%WORKSPACE%\symbols" -yaml kphdyn.yaml -fixnull
 ```
 
-```bash
+```shell
 @echo Fix struct offset
 
 python update_symbols.py -xml kphdyn.xml -symboldir "%WORKSPACE%\symbols" -yaml kphdyn.yaml -fixstruct
