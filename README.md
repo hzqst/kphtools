@@ -1,10 +1,8 @@
 # Toolkits for KPH Dynamic Data
 
-several scripts are included to generate offsets for SystemInformer's `kphdyn.xml`, adding your own "struct_offset", or even "func_offset" to it.
+Several scripts are included to generate offsets for [SystemInformer](https://github.com/winsiderss/systeminformer)'s [kphdyn.xml](https://github.com/winsiderss/systeminformer/blob/master/kphlib/kphdyn.xml), adding your own "struct_offset", or even "func_offset" to it (customized via `kphdyn.yaml`).
 
 ## Get kphdyn.xml
-
-[kphdyn.xml](https://github.com/winsiderss/systeminformer/blob/master/kphlib/kphdyn.xml).
 
 ```bash
 wget https://raw.githubusercontent.com/winsiderss/systeminformer/master/kphlib/kphdyn.xml
@@ -129,25 +127,25 @@ python update_symbols.py -xml="path/to/kphdyn.xml" -symboldir="C:/Symbols" -fixs
 Update and overwrite the original file:
 
 ```bash
-python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json"
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -yaml="kphdyn.yaml"
 ```
 
 Save to a different output file:
 
 ```bash
-python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -outxml="kphdyn_updated.xml"
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -yaml="kphdyn.yaml" -outxml="kphdyn_updated.xml"
 ```
 
 Process only a specific SHA256 hash:
 
 ```bash
-python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -sha256="abc123..."
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -yaml="kphdyn.yaml" -sha256="abc123..."
 ```
 
 Use custom llvm-pdbutil path:
 
 ```bash
-python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -json="kphdyn.json" -pdbutil="/path/to/llvm-pdbutil"
+python update_symbols.py -xml="kphdyn.xml" -symboldir="C:/Symbols" -yaml="kphdyn.yaml" -pdbutil="/path/to/llvm-pdbutil"
 ```
 
 **Syncfile mode examples:**
