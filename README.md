@@ -431,7 +431,7 @@ python reverse_symbols.py -symboldir="%WORKSPACE%\symbols"  -reverse=PspSetCreat
 ```
 
 ```shell
-@echo Generate strut function and variable RVA via ntoskrnl pdb
+@echo Generate strut function and variable RVA via ntoskrnl pdb, llvm-pdbutil assumed in PATH
 
 python update_symbols.py -xml kphdyn.xml -symboldir "%WORKSPACE%\symbols" -yaml kphdyn.yaml
 ```
