@@ -131,9 +131,9 @@
     - name: EpProtection
       struct_offset: "_EPROCESS->Protection"
       type: uint16
-      
-    - name: EpDirectoryTableBase
-      struct_offset: "_EPROCESS->DirectoryTableBase"
+
+    - name: KpDirectoryTableBase
+      struct_offset: "_KPROCESS->DirectoryTableBase"
       type: uint16
 
     - name: PspCreateProcessNotifyRoutine
