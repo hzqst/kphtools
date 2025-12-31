@@ -259,10 +259,10 @@ For each `<data>` entry matching the specified files, the script:
 </fields>
 ```
 
-## Add new ntoskrnl entry to kphdyn.xml with known MD5/SHA256
+## Add new ntoskrnl entry to kphdyn.xml with known MD5/SHA256 (Deprecated)
 
 ```
-python add_ntoskrnl_from_virustotal.py -xml="path/to/kphdyn.xml" -md5=9F4D868D410F6D68D0A73C9139D754B0 -apikey="{YourAPIKey}"
+python add_ntoskrnl_from_virustotal.py -xml="path/to/kphdyn.xml" -md5=9F4D868D410F6D68D0A73C9139D754B0 -apikey="{YourVirusTotalAPIKey}"
 ```
 
 A new entry :
