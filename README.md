@@ -1,5 +1,7 @@
 # Toolkits for KPH Dynamic Data
 
+several scripts are included to generate offsets for SystemInformer's `kphdyn.xml`, adding your own "struct_offset", or even "func_offset" to it.
+
 ## Get kphdyn.xml
 
 [kphdyn.xml](https://github.com/winsiderss/systeminformer/blob/master/kphlib/kphdyn.xml).
