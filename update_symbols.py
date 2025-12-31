@@ -70,10 +70,20 @@ Optional Arguments:
 Syncfile Mode:
     Scans the symbol directory for PE files (exe/dll/sys) and adds missing
     entries to the XML. For each PE file found:
-    - Extracts arch/file/version from the directory path
-    - If the entry doesn't exist in XML, parses PE to get hash/timestamp/size
+    - Extracts arch/file/version/sha256 from the directory path
+    - If the entry doesn't exist in XML (matched by arch/file/version/hash),
+      parses PE to get timestamp/size
     - Inserts new entry after the closest smaller version
     - Sets fields ID to 0 (not yet resolved)
+
+    Directory structure:
+        {symboldir}/{arch}/{filename}.{version}/{sha256}/{filename}
+        {symboldir}/{arch}/{filename}.{version}/{sha256}/ntkrnlmp.pdb
+        {symboldir}/{arch}/{filename}.{version}/{sha256}/SymbolMapping.yaml
+
+    Example:
+        symbols/amd64/ntoskrnl.exe.10.0.28000.1362/68d5867b.../ntoskrnl.exe
+        symbols/amd64/ntoskrnl.exe.10.0.28000.1362/68d5867b.../ntkrnlmp.pdb
 
     The -fast flag skips PE parsing for entries that already exist,
     only parsing when a new entry needs to be added.
@@ -387,7 +397,7 @@ def collect_existing_fields(root):
     return fields_map
 
 
-def get_pdb_path(symboldir, arch, version):
+def get_pdb_path(symboldir, arch, version, sha256):
     """
     Build the path to the PDB file.
 
@@ -395,11 +405,12 @@ def get_pdb_path(symboldir, arch, version):
         symboldir: Base symbol directory
         arch: Architecture (amd64, arm64, etc.)
         version: Windows version string
+        sha256: SHA256 hash of the PE file (lowercase)
 
     Returns:
         Path to the PDB file
     """
-    symbol_subdir = os.path.join(symboldir, arch, f"ntoskrnl.exe.{version}")
+    symbol_subdir = os.path.join(symboldir, arch, f"ntoskrnl.exe.{version}", sha256)
     pdb_path = os.path.join(symbol_subdir, "ntkrnlmp.pdb")
     return pdb_path
 
@@ -1436,7 +1447,7 @@ def remove_orphan_fields(root):
 # Fixnull Mode Functions
 # =============================================================================
 
-def get_symbol_mapping_path(symboldir, arch, file_name, version):
+def get_symbol_mapping_path(symboldir, arch, file_name, version, sha256):
     """
     Build the path to the SymbolMapping.yaml file.
 
@@ -1445,11 +1456,12 @@ def get_symbol_mapping_path(symboldir, arch, file_name, version):
         arch: Architecture (amd64, arm64, etc.)
         file_name: File name (e.g., ntoskrnl.exe)
         version: Windows version string
+        sha256: SHA256 hash of the PE file (lowercase)
 
     Returns:
         Path to the SymbolMapping.yaml file
     """
-    symbol_subdir = os.path.join(symboldir, arch, f"{file_name}.{version}")
+    symbol_subdir = os.path.join(symboldir, arch, f"{file_name}.{version}", sha256)
     mapping_path = os.path.join(symbol_subdir, "SymbolMapping.yaml")
     return mapping_path
 
@@ -1656,10 +1668,16 @@ def fixnull_main(args, root, file_list, symbols_list):
         arch = data_entry.get("arch")
         version = data_entry.get("version")
         file_name = data_entry.get("file")
+        sha256 = data_entry.get("hash", "").lower()
 
         print(f"\n[{i+1}/{len(null_entries)}] Processing {file_name} {version} ({arch})")
 
-        cache_key = (arch, version)
+        if not sha256:
+            print(f"  Warning: No hash attribute in data entry, skipping")
+            skip_count += 1
+            continue
+
+        cache_key = (arch, version, sha256)
         offsets = None
 
         # Try to get offsets from cache first
@@ -1668,7 +1686,7 @@ def fixnull_main(args, root, file_list, symbols_list):
             print(f"  Using cached offsets")
         else:
             # Load SymbolMapping.yaml
-            mapping_path = get_symbol_mapping_path(symboldir, arch, file_name, version)
+            mapping_path = get_symbol_mapping_path(symboldir, arch, file_name, version, sha256)
 
             if not os.path.exists(mapping_path):
                 print(f"  SymbolMapping.yaml not found: {mapping_path}")
@@ -1696,7 +1714,7 @@ def fixnull_main(args, root, file_list, symbols_list):
 
             # If there are struct_offset symbols, try PDB or fallback to max values
             if struct_symbols:
-                pdb_path = get_pdb_path(symboldir, arch, version)
+                pdb_path = get_pdb_path(symboldir, arch, version, sha256)
                 struct_offsets = None
 
                 if os.path.exists(pdb_path):
@@ -2085,18 +2103,19 @@ def parse_version(version_str):
 
 def parse_file_path_info(file_path, symboldir):
     """
-    Extract arch, filename, version from file path.
+    Extract arch, filename, version, and sha256 from file path.
 
     Args:
         file_path: Full path to PE file
         symboldir: Base symbol directory
 
     Returns:
-        Dict with 'arch', 'file', 'version' keys, or None if parsing fails
+        Dict with 'arch', 'file', 'version', 'sha256' keys, or None if parsing fails
 
     Example:
-        Input: "symbols/amd64/ntoskrnl.exe.10.0.16299.551/ntoskrnl.exe"
-        Output: {'arch': 'amd64', 'file': 'ntoskrnl.exe', 'version': '10.0.16299.551'}
+        Input: "symbols/amd64/ntoskrnl.exe.10.0.16299.551/68d5867b.../ntoskrnl.exe"
+        Output: {'arch': 'amd64', 'file': 'ntoskrnl.exe', 'version': '10.0.16299.551',
+                 'sha256': '68d5867b...'}
     """
     # Normalize paths
     file_path = os.path.normpath(file_path)
@@ -2110,12 +2129,17 @@ def parse_file_path_info(file_path, symboldir):
 
     # Split into components
     parts = rel_path.replace("\\", "/").split("/")
-    if len(parts) < 3:
+    if len(parts) < 4:
         return None
 
     arch = parts[0]
     version_dir = parts[1]  # e.g., "ntoskrnl.exe.10.0.16299.551"
-    filename = parts[2]      # e.g., "ntoskrnl.exe"
+    sha256 = parts[2]       # e.g., "68d5867b..."
+    filename = parts[3]     # e.g., "ntoskrnl.exe"
+
+    # Validate sha256 format (should be 64 hex characters)
+    if len(sha256) != 64 or not all(c in '0123456789abcdef' for c in sha256.lower()):
+        return None
 
     # Parse version from directory name
     # Format: filename.version (e.g., "ntoskrnl.exe.10.0.16299.551")
@@ -2127,7 +2151,8 @@ def parse_file_path_info(file_path, symboldir):
     return {
         "arch": arch,
         "file": filename,
-        "version": version
+        "version": version,
+        "sha256": sha256.lower()
     }
 
 
@@ -2167,15 +2192,16 @@ def parse_pe_info(pe_path):
         return None
 
 
-def find_data_entry(root, arch, file_name, version):
+def find_data_entry(root, arch, file_name, version, sha256):
     """
-    Find a data entry matching arch, file, and version.
+    Find a data entry matching arch, file, version, and hash.
 
     Args:
         root: XML root element
         arch: Architecture (e.g., "amd64")
         file_name: File name (e.g., "ntoskrnl.exe")
         version: Version string (e.g., "10.0.16299.551")
+        sha256: SHA256 hash of the PE file (lowercase)
 
     Returns:
         Matching data element, or None if not found
@@ -2183,7 +2209,8 @@ def find_data_entry(root, arch, file_name, version):
     for data_elem in root.findall("data"):
         if (data_elem.get("arch") == arch and
             data_elem.get("file") == file_name and
-            data_elem.get("version") == version):
+            data_elem.get("version") == version and
+            data_elem.get("hash", "").lower() == sha256.lower()):
             return data_elem
     return None
 
@@ -2294,10 +2321,19 @@ def scan_symbol_directory(symboldir):
             if not os.path.isdir(version_path):
                 continue
 
-            for file_name in os.listdir(version_path):
-                file_ext = os.path.splitext(file_name)[1].lower()
-                if file_ext in pe_extensions:
-                    pe_files.append(os.path.join(version_path, file_name))
+            for sha256_dir in os.listdir(version_path):
+                sha256_path = os.path.join(version_path, sha256_dir)
+                if not os.path.isdir(sha256_path):
+                    continue
+
+                # Validate sha256 format (should be 64 hex characters)
+                if len(sha256_dir) != 64 or not all(c in '0123456789abcdef' for c in sha256_dir.lower()):
+                    continue
+
+                for file_name in os.listdir(sha256_path):
+                    file_ext = os.path.splitext(file_name)[1].lower()
+                    if file_ext in pe_extensions:
+                        pe_files.append(os.path.join(sha256_path, file_name))
 
     return pe_files
 
@@ -2343,21 +2379,28 @@ def syncfile_main(args, root):
         arch = path_info["arch"]
         file_name = path_info["file"]
         version = path_info["version"]
+        sha256 = path_info["sha256"]
 
-        # Check if entry exists
-        existing = find_data_entry(root, arch, file_name, version)
+        # Check if entry exists (now using sha256 from path)
+        existing = find_data_entry(root, arch, file_name, version, sha256)
         if existing is not None:
             skipped_count += 1
             continue
 
         # Entry doesn't exist, need to add it
         print(f"\n[{i+1}/{len(pe_files)}] {arch}/{file_name} v{version}")
-        print(f"  Entry missing, parsing PE...")
+        print(f"  Entry missing (sha256: {sha256[:16]}...), parsing PE...")
 
-        # Parse PE to get hash/timestamp/size
+        # Parse PE to get timestamp/size (sha256 already known from path)
         pe_info = parse_pe_info(pe_path)
         if pe_info is None:
             print(f"  Failed to parse PE")
+            failed_count += 1
+            continue
+
+        # Verify sha256 matches (optional sanity check)
+        if pe_info["sha256"].lower() != sha256.lower():
+            print(f"  Warning: SHA256 mismatch! Path says {sha256}, PE file has {pe_info['sha256']}")
             failed_count += 1
             continue
 
@@ -2367,7 +2410,7 @@ def syncfile_main(args, root):
         # Create new entry
         create_data_entry(
             root, arch, file_name, version,
-            pe_info["sha256"], pe_info["timestamp"], pe_info["size"],
+            sha256, pe_info["timestamp"], pe_info["size"],
             insert_idx
         )
 
@@ -2568,7 +2611,7 @@ def main():
     # Process each data entry
     referenced_ids = set()
     new_fields = {}  # id -> offsets
-    pdb_cache = {}  # (arch, version) -> offsets
+    pdb_cache = {}  # (arch, version, sha256) -> offsets
 
     success_count = 0
     skip_count = 0
@@ -2578,17 +2621,23 @@ def main():
         arch = data_entry.get("arch")
         version = data_entry.get("version")
         file_name = data_entry.get("file")
+        sha256 = data_entry.get("hash", "").lower()
 
         print(f"\n[{i+1}/{len(data_entries)}] Processing {file_name} {version} ({arch})")
 
+        if not sha256:
+            print(f"  Warning: No hash attribute in data entry, skipping")
+            skip_count += 1
+            continue
+
         # Check cache first
-        cache_key = (arch, version)
+        cache_key = (arch, version, sha256)
         if cache_key in pdb_cache:
             offsets = pdb_cache[cache_key]
             print(f"  Using cached offsets")
         else:
             # Find and parse PDB
-            pdb_path = get_pdb_path(symboldir, arch, version)
+            pdb_path = get_pdb_path(symboldir, arch, version, sha256)
 
             if not os.path.exists(pdb_path):
                 print(f"  PDB not found: {pdb_path}")
